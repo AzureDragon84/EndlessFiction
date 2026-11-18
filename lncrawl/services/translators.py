@@ -11,7 +11,7 @@ consistent across chapters.
 from functools import cached_property
 from hashlib import sha256
 import logging
-from threading import Event, Lock
+from threading import Event
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar
 
 import sqlmodel as sq
@@ -20,14 +20,23 @@ from ..context import ctx
 from ..dao import (
     Chapter,
     ChapterTranslation,
+    GlossaryEntry,
+    GlossaryTerm,
     Novel,
-    NovelGlossary,
     NovelTranslation,
     Volume,
     VolumeTranslation,
 )
 from ..enums import LanguageCode
 from ..exceptions import AbortedException, ServerErrors
+from .glossary import (
+    apply_engine_proposal,
+    bump_revision,
+    glossary_lock,
+    record_extracted_terms,
+    term_lock,
+)
+from .glossary_extract import extract_terms
 
 if TYPE_CHECKING:
     from translator import (
@@ -42,22 +51,6 @@ T = TypeVar("T")
 
 # How many characters of the previous translated chapter to pass as continuity context.
 _PREV_TAIL_CHARS = 500
-
-# Serializes read-modify-write of a glossary row per (novel_id, language). Concurrent
-# chapter/volume translation jobs of the same novel+language would otherwise both insert
-# the first row (IntegrityError on the UniqueConstraint) or clobber each other's terms.
-_glossary_locks: Dict[str, Lock] = {}
-_glossary_locks_guard = Lock()
-
-
-def _glossary_lock(novel_id: str, language: str) -> Lock:
-    key = f"{novel_id}:{language}"
-    with _glossary_locks_guard:
-        lock = _glossary_locks.get(key)
-        if lock is None:
-            lock = Lock()
-            _glossary_locks[key] = lock
-        return lock
 
 
 def _code(lang: Any) -> str:
@@ -185,39 +178,68 @@ class TranslationService:
     # ---------------------------------------------------------------------------------------------
 
     def _load_glossary(self, novel_id: str, target: Any) -> Dict[str, str]:
+        """Decided renderings for one target language, in the plain
+        `source -> rendering` shape the translator package expects."""
         with ctx.db.session() as sess:
-            row = sess.exec(
-                sq.select(NovelGlossary).where(
-                    sq.col(NovelGlossary.novel_id) == novel_id,
-                    sq.col(NovelGlossary.language) == _code(target),
+            rows = sess.exec(
+                sq.select(GlossaryTerm.source, GlossaryEntry.rendering)
+                .join(GlossaryEntry, sq.col(GlossaryEntry.term_id) == sq.col(GlossaryTerm.id))
+                .where(
+                    sq.col(GlossaryTerm.novel_id) == novel_id,
+                    sq.col(GlossaryEntry.language) == _code(target),
+                    sq.col(GlossaryEntry.rendering).is_not(None),
                 )
-            ).first()
-            return dict(row.terms) if row else {}
+            ).all()
+        return {source: rendering for source, rendering in rows if rendering}
 
-    def _merge_glossary(self, novel_id: str, target: Any, new_terms: Dict[str, str]) -> None:
+    def _merge_glossary(
+        self,
+        novel_id: str,
+        target: Any,
+        new_terms: Dict[str, str],
+        engine: Optional[str] = None,
+    ) -> None:
+        """Store engine-proposed terms; a locked (editor) entry is never overwritten."""
         if not new_terms:
             return
         language = _code(target)
-        with _glossary_lock(novel_id, language), ctx.db.session() as sess:
-            row = sess.exec(
-                sq.select(NovelGlossary).where(
-                    sq.col(NovelGlossary.novel_id) == novel_id,
-                    sq.col(NovelGlossary.language) == language,
-                )
-            ).first()
-            if row:
-                merged = dict(row.terms)
-                merged.update(new_terms)
-                row.terms = merged
-                sess.add(row)
-            else:
-                sess.add(
-                    NovelGlossary(
-                        novel_id=novel_id,
-                        language=language,
-                        terms=dict(new_terms),
-                    )
-                )
+        with glossary_lock(novel_id, language), ctx.db.session() as sess:
+            changed = 0
+            for source, rendering in new_terms.items():
+                source = str(source or "").strip()
+                rendering = str(rendering or "").strip()
+                if not source or not rendering:
+                    continue
+                if apply_engine_proposal(
+                    sess,
+                    novel_id,
+                    language,
+                    source,
+                    rendering,
+                    engine=engine,
+                ):
+                    changed += 1
+            if changed:
+                bump_revision(sess, novel_id, language)
+            sess.commit()
+
+    def _run_prepass(self, novel: Novel, chapter: Chapter, content: str) -> None:
+        """Store the chapter's recurring names before the engine sees it.
+
+        Frequency is cumulative, so this runs only on a chapter's first
+        translation: scanning a retranslation would count the same text twice.
+        Extraction is auxiliary — a chapter must still translate when the
+        scanner cannot read it.
+        """
+        try:
+            terms = extract_terms([(chapter.serial, content)], language=novel.language)
+        except Exception as error:
+            logger.warning(f"glossary pre-pass skipped for chapter {chapter.serial}: {error}")
+            return
+        if not terms:
+            return
+        with term_lock(chapter.novel_id), ctx.db.session() as sess:
+            record_extracted_terms(sess, chapter.novel_id, terms)
             sess.commit()
 
     def _previous_chapter_tail(self, chapter: Chapter, target: Any) -> Optional[str]:
@@ -295,7 +317,7 @@ class TranslationService:
             )
             sess.commit()
 
-        self._merge_glossary(novel.id, target, terms)
+        self._merge_glossary(novel.id, target, terms, engine=engine)
 
     def translate_volume(
         self,
@@ -330,7 +352,7 @@ class TranslationService:
             )
             sess.commit()
 
-        self._merge_glossary(volume.novel_id, target, terms)
+        self._merge_glossary(volume.novel_id, target, terms, engine=engine)
 
     def translate_chapter(
         self,
@@ -346,6 +368,8 @@ class TranslationService:
             return
 
         novel = ctx.novels.get(chapter.novel_id)
+        if translation is None:
+            self._run_prepass(novel, chapter, content)
         source = _source_code(novel)
         glossary = self._load_glossary(chapter.novel_id, target)
 
@@ -410,4 +434,4 @@ class TranslationService:
             sess.commit()
 
         ctx.files.save_text(translation.content_file, translated)
-        self._merge_glossary(chapter.novel_id, target, {**terms, **title_terms})
+        self._merge_glossary(chapter.novel_id, target, {**terms, **title_terms}, engine=engine)

@@ -56,9 +56,16 @@ and persistence; the package owns engines, routing lanes, rate limits, retries, 
   `translation_quota_exhausted`, other `ApiError`/`ValidationError` → `translation_failure`,
   facade `AbortedError` → `AbortedException`. The job `signal` and
   `ctx.config.translator.request_timeout` are passed to every engine call.
-- **Glossary loop** — `translate_novel/volume/chapter` load the stored `NovelGlossary`,
-  send it with each request, and merge returned `new_terms` back. Chapter translation
-  dedupes via a content hash and stores results through `ctx.files.save_text`.
+- **Glossary loop** — `translate_novel/volume/chapter` load `glossary_entries` for the
+  target language (joined to `glossary_terms`) as a plain `source -> rendering` dict, send
+  it with each request, and merge returned `new_terms` back. A chapter's *first* translation
+  also runs the frequency pre-pass (`services/glossary_extract.py`): recurring source names
+  are stored as terms with `freq`, `first_chapter_serial`, `pinyin` and `category` before the
+  engine sees the text, and `services/glossary.py` archives every proposal (accepted or not)
+  in `glossary_candidates`. Editor writes go through `services/glossary.py` and are `locked`,
+  so an engine merge never overwrites them;
+  `NovelGlossary.revision` bumps once per batch that changed something. Chapter translation dedupes via a
+  content hash and stores results through `ctx.files.save_text`.
 - **Detection** — `ctx.translator.detect_language(text)` (local, no quota, no event loop)
   returns an ISO 639-1 code or None. `fetch_novel`/`fetch_chapter` use it to fill
   `Novel.language` when the source doesn't provide one; values are normalized via

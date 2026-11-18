@@ -13,6 +13,20 @@ def normalize(text: str) -> str:
     return unicodedata.normalize("NFKD", text).casefold()
 
 
+def normalize_term_key(text: str) -> str:
+    """Identity of a glossary term: compatibility-normalised, spaces collapsed.
+
+    Case is deliberately preserved: `Sword` and `sword` are different terms.
+    """
+    value = unicodedata.normalize("NFKC", str(text or ""))
+    return _RE_SPACES.sub(" ", value).strip()
+
+
+def normalize_rendering_key(text: str) -> str:
+    """Dedupe key for a proposed rendering: case and spacing are irrelevant."""
+    return _RE_SPACES.sub(" ", normalize(text)).strip()
+
+
 def format_title(text: str) -> str:
     name = html.unescape(str(text or ""))
     name = unicodedata.normalize("NFKC", name)

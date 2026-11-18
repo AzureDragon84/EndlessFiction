@@ -145,3 +145,29 @@ class LanguageCode(str, Enum):
     turkish = "tr"
     urdu = "ur"
     vietnamese = "vi"
+
+
+class TermCategory(str, Enum):
+    character = "character"
+    location = "location"
+    sect_org = "sect_org"
+    rank_realm = "rank_realm"
+    technique = "technique"
+    item = "item"
+    honorific = "honorific"
+    creature = "creature"
+    special = "special"
+
+
+class TermGender(str, Enum):
+    unknown = "unknown"
+    male = "male"
+    female = "female"
+    neutral = "neutral"
+
+
+class TermStrategy(str, Enum):
+    transliteration = "transliteration"
+    literal = "literal"
+    literary = "literary"
+    concise = "concise"

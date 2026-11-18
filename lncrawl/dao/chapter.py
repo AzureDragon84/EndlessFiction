@@ -61,6 +61,10 @@ class ChapterTranslation(BaseTable, table=True):
     language: str = sa.Field(description="Target language code, e.g. 'fr'")
     chapter_title: str = sa.Field(description="Translated title of the chapter")
     content_hash: str = sa.Field(description="SHA256 of original content for cache invalidation")
+    glossary_revision: Optional[int] = sa.Field(
+        default=None,
+        description="Glossary revision this translation was produced under",
+    )
 
     @computed_field  # type: ignore[misc]
     @property

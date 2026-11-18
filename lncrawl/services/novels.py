@@ -7,9 +7,10 @@ from ..context import ctx
 from ..dao import (
     Artifact,
     ChapterTranslation,
+    GlossaryEntry,
+    GlossaryTerm,
     LanguageCode,
     Novel,
-    NovelGlossary,
     NovelSort,
     NovelTag,
     NovelTranslation,
@@ -17,6 +18,14 @@ from ..dao import (
 )
 from ..exceptions import ServerErrors
 from ..server.models import Paginated
+from ..utils.text_tools import normalize_term_key
+from .glossary import (
+    bump_revision,
+    create_manual_entry,
+    decide_manually,
+    get_or_create_term,
+    glossary_lock,
+)
 
 
 class NovelService:
@@ -170,50 +179,88 @@ class NovelService:
         novel_id: str,
         language: Optional[LanguageCode] = None,
     ) -> Dict[str, Dict[str, str]]:
-        """Map of glossary terms for a novel, keyed by language."""
+        """Decided terms for a novel, keyed by language then source term."""
         with ctx.db.session() as sess:
-            stmt = sq.select(NovelGlossary).where(sq.col(NovelGlossary.novel_id) == novel_id)
+            stmt = (
+                sq.select(GlossaryTerm.source, GlossaryEntry.language, GlossaryEntry.rendering)
+                .join(GlossaryEntry, sq.col(GlossaryEntry.term_id) == sq.col(GlossaryTerm.id))
+                .where(
+                    sq.col(GlossaryTerm.novel_id) == novel_id,
+                    sq.col(GlossaryEntry.rendering).is_not(None),
+                )
+            )
             if language:
-                stmt = stmt.where(sq.col(NovelGlossary.language) == language.value)
+                stmt = stmt.where(sq.col(GlossaryEntry.language) == language.value)
             rows = sess.exec(stmt).all()
-            return {row.language: dict(row.terms) for row in rows}
+        glossaries: Dict[str, Dict[str, str]] = {}
+        for source, lang, rendering in rows:
+            if rendering:
+                glossaries.setdefault(lang, {})[source] = rendering
+        return glossaries
 
     def update_glossary(
         self,
         novel_id: str,
         language: LanguageCode,
         terms: Dict[str, str],
+        *,
+        user_id: Optional[str] = None,
     ) -> Dict[str, str]:
-        """Replace the glossary terms of a novel for one target language."""
-        cleaned = {
-            key.strip(): value.strip()
-            for key, value in terms.items()
-            if key.strip() and value.strip()
-        }
-        with ctx.db.session() as sess:
+        """Replace one language's glossary with editor decisions.
+
+        Entries written here are locked, so an engine merge can never overwrite
+        them. Repeating an engine's current rendering counts as adopting it, so
+        that save locks the entry too. A term dropped from `terms` becomes
+        undecided again rather than being deleted, keeping its identity and
+        history.
+        """
+        lang = language.value
+        incoming: Dict[str, str] = {}
+        sources: Dict[str, str] = {}
+        for key, value in terms.items():
+            source = str(key or "").strip()
+            rendering = str(value or "").strip()
+            if source and rendering:
+                source_key = normalize_term_key(source)
+                incoming[source_key] = rendering
+                sources[source_key] = source
+
+        with glossary_lock(novel_id, lang), ctx.db.session() as sess:
             if not sess.get(Novel, novel_id):
                 raise ServerErrors.no_such_novel
-            row = sess.exec(
-                sq.select(NovelGlossary)
+            pending = dict(incoming)
+            changed = 0
+
+            existing = sess.exec(
+                sq.select(GlossaryTerm, GlossaryEntry)
+                .join(GlossaryEntry, sq.col(GlossaryEntry.term_id) == sq.col(GlossaryTerm.id))
                 .where(
-                    sq.col(NovelGlossary.novel_id) == novel_id,
-                    sq.col(NovelGlossary.language) == language.value,
+                    sq.col(GlossaryTerm.novel_id) == novel_id,
+                    sq.col(GlossaryEntry.language) == lang,
                 )
-                .limit(1)
-            ).first()
-            if row:
-                row.terms = cleaned
-                sess.add(row)
-            elif cleaned:
-                sess.add(
-                    NovelGlossary(
-                        novel_id=novel_id,
-                        language=language.value,
-                        terms=cleaned,
-                    )
-                )
+            ).all()
+
+            for term, entry in existing:
+                rendering = pending.pop(term.source_key, None)
+                if rendering is None:
+                    if entry.rendering is None:
+                        continue
+                    decide_manually(sess, entry, None, user_id=user_id)
+                    changed += 1
+                elif (entry.rendering, entry.locked) != (rendering, True):
+                    decide_manually(sess, entry, rendering, user_id=user_id)
+                    changed += 1
+
+            for source_key, rendering in pending.items():
+                term = get_or_create_term(sess, novel_id, sources[source_key])
+                create_manual_entry(sess, term.id, lang, rendering, user_id=user_id)
+                changed += 1
+
+            if changed:
+                bump_revision(sess, novel_id, lang)
             sess.commit()
-        return cleaned
+
+        return {sources[key]: rendering for key, rendering in incoming.items()}
 
     def delete(self, novel_id: str, language: Optional[LanguageCode] = None) -> bool:
         if language:
@@ -236,8 +283,12 @@ class NovelService:
         return True
 
     def delete_translation(self, novel_id: str, language: LanguageCode) -> bool:
-        """Remove one target language of a novel: translation rows, glossary,
-        translated chapter files, and artifacts in that language."""
+        """Remove one target language of a novel: translation rows, translated
+        chapter files, and artifacts in that language.
+
+        The glossary is kept, so a later translation of the same language reuses
+        the editor's decisions instead of starting over.
+        """
         lang = language.value
         with ctx.db.session() as sess:
             chapters = sess.exec(

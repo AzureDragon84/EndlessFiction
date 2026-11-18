@@ -115,6 +115,7 @@ class DB:
         try:
             self._sync_sqlite_schema()
             self._normalize_enum_values()
+            self._backfill_glossary_rows()
         except Exception:
             logger.exception("Schema reconciliation failed.")
             self._restore_database(backup)
@@ -148,6 +149,21 @@ class DB:
                         f'UPDATE "{table}" SET "{column}" = ? WHERE "{column}" = ?',
                         (int(member.value), member.name),
                     )
+
+    def _backfill_glossary_rows(self) -> None:
+        """Copy legacy `NovelGlossary.terms` dicts into glossary rows.
+
+        Migration scripts handle this on the server, but SQLite never replays
+        them, so the same idempotent pass runs here after the additive schema
+        sync has created the tables. It only runs while the schema fingerprint
+        is stale, i.e. once per upgrade, and retries if it fails.
+        """
+        from ..utils.glossary_tools import backfill_legacy_glossaries
+
+        with self.engine.begin() as conn:
+            count = backfill_legacy_glossaries(conn)
+        if count:
+            logger.info(f"Backfilled {count} legacy glossary term(s) into rows.")
 
     def _bootstrap_server(self, reset_on_failure: bool = False):
         """Run real Alembic migrations for Postgres/MySQL deployments."""

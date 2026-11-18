@@ -137,7 +137,7 @@ def update_novel_glossary(
     # same way as requesting a translation.
     if not ctx.tier.translation_enabled(user):
         raise ServerErrors.tier_not_allowed
-    return ctx.novels.update_glossary(novel_id, language, terms)
+    return ctx.novels.update_glossary(novel_id, language, terms, user_id=user.id)
 
 
 @router.get("/{novel_id}/recommended", summary="Gets recommended novels based on similarity")

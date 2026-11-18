@@ -82,6 +82,8 @@ class NovelTranslation(BaseTable, table=True):
 
 
 class NovelGlossary(BaseTable, table=True):
+    """Per-target-language glossary header: the version its entries are at."""
+
     __tablename__ = "novel_glossaries"  # type: ignore
     __table_args__ = (
         sa.UniqueConstraint("novel_id", "language"),
@@ -90,8 +92,8 @@ class NovelGlossary(BaseTable, table=True):
 
     novel_id: str = sa.Field(foreign_key="novels.id", ondelete="CASCADE")
     language: str = sa.Field(description="Target language code, e.g. 'en'")
-    terms: dict = sa.Field(
-        default={},
-        sa_type=sa.JSON,
-        description="Source term -> chosen translation, grown across chapters",
+    revision: int = sa.Field(
+        default=0,
+        sa_column=sa.Column(sa.Integer, nullable=False, server_default="0"),
+        description="Glossary revision, bumped whenever an entry changes",
     )
