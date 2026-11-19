@@ -337,9 +337,9 @@ class AppConfig(_Section):
         """Admin Email.
 
         Sign-in email for the built-in administrator account (for example in the web interface).
-        The default is `"admin"`.
+        The default is `"admin_alpha"`.
         """
-        return self._get("admin_email", "admin")
+        return self._get("admin_email", "admin_alpha")
 
     @admin_email.setter
     def admin_email(self, v: str) -> None:
@@ -349,10 +349,10 @@ class AppConfig(_Section):
     def admin_password(self) -> Annotated[str, Sensitive]:
         """Admin Password.
 
-        Password for the built-in administrator. Defaults to `"admin"`; choose a strong password
-        on any shared or public setup.
+        Password for the built-in administrator. Defaults to `"admin_alpha"`; choose a strong
+        password on any shared or public setup.
         """
-        return self._get("admin_password", "admin")
+        return self._get("admin_password", "admin_alpha")
 
     @admin_password.setter
     def admin_password(self, v: str) -> None:
