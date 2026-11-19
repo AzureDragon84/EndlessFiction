@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Glossary</title>
+    <style>
+      :root { color-scheme: light dark; --line: #8884; --muted: #8888; }
+      * { box-sizing: border-box; }
+      body { margin: 0; font: 14px/1.45 system-ui, sans-serif; padding: 16px 20px 40px; overflow-x: hidden; }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      p.hint { color: var(--muted); margin: 0 0 16px; }
+      fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 0 0 16px; min-width: 0; }
+      legend { padding: 0 6px; color: var(--muted); }
+      label { display: inline-flex; gap: 6px; align-items: center; margin: 0 12px 8px 0; }
+      input, select, button, textarea { font: inherit; }
+      input[type="text"], input[type="password"], select, textarea { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; }
+      textarea { width: 100%; resize: vertical; }
+      button { padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: #8881; cursor: pointer; }
+      button:hover { background: #8883; }
+      button.primary { background: #2f7d3244; border-color: #2f7d32aa; }
+      button.danger { color: #c62828; }
+      button:disabled { opacity: .5; cursor: default; }
+      #novels { max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+      #novels button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 7px 10px; }
+      #novels button.active { background: #2f7d3244; }
+      #novels small { color: var(--muted); }
+      .scroll { overflow-x: auto; max-width: 100%; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+      th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; }
+      td.source { font-size: 15px; }
+      td.num { text-align: right; font-variant-numeric: tabular-nums; }
+      .lock { font-size: 11px; color: #2f7d32; }
+      .cand, .meta { color: var(--muted); font-size: 12px; }
+      #status, #coverage, #count, #import-status { color: var(--muted); min-height: 20px; margin: 8px 0; }
+      #work { display: none; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      .row textarea { flex: 1 1 320px; }
+      .pager { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Glossary review</h1>
+    <p class="hint">Scan the stored chapters for recurring names, then decide their rendering. Saved decisions are locked: the engine can never overwrite them. Terms are collected before they are applied, so changing a rendering never means retranslating a chapter.</p>
+
+    <fieldset id="login">
+      <legend>Sign in</legend>
+      <div class="row">
+        <label>Email <input id="email" type="text" value="admin" autocomplete="username" /></label>
+        <label>Password <input id="password" type="password" value="admin" autocomplete="current-password" /></label>
+        <button class="primary" id="signin">Sign in</button>
+      </div>
+    </fieldset>
+
+    <div id="work">
+      <fieldset>
+        <legend>Novel</legend>
+        <div class="row">
+          <input id="search" type="text" placeholder="Search title" size="28" />
+          <button id="find">Search</button>
+          <span id="novel-title" class="hint"></span>
+        </div>
+        <div id="novels"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Scan</legend>
+        <div class="row" id="methods"></div>
+        <div class="row">
+          <label>Scan <input id="limit" type="text" value="50" size="3" /> chapters</label>
+          <label>Min freq <input id="scanmin" type="text" placeholder="auto" size="3" /></label>
+          <label><input id="force" type="checkbox" /> re-read covered</label>
+          <button class="primary" id="extract">Extract terms</button>
+        </div>
+        <div id="coverage"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Terms</legend>
+        <div class="row">
+          <label>Language <input id="language" type="text" value="en" size="4" /></label>
+          <input id="filter" type="text" placeholder="Filter terms" size="18" />
+          <label>Tier
+            <select id="tier">
+              <option value="core" selected>core</option>
+              <option value="all">all</option>
+              <option value="tail">tail</option>
+            </select>
+          </label>
+          <label><input id="fragments" type="checkbox" /> fragments</label>
+          <label><input id="categorized" type="checkbox" checked /> names only</label>
+          <label>Min freq <input id="minfreq" type="text" value="1" size="3" /></label>
+          <button id="refresh">Refresh list</button>
+        </div>
+        <div id="status"></div>
+        <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Source</th>
+              <th>Pinyin</th>
+              <th>Category</th>
+              <th>Tier</th>
+              <th>From</th>
+              <th class="num">Freq</th>
+              <th class="num">First</th>
+              <th>Rendering</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="terms"></tbody>
+        </table>
+        </div>
+        <div class="pager">
+          <button id="prev">Previous</button>
+          <button id="next">Next</button>
+          <span id="count" class="hint"></span>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Import a term list</legend>
+        <div class="row">
+          <textarea id="seed" rows="4" placeholder="One term per line — names you already know"></textarea>
+        </div>
+        <div class="row">
+          <button id="import">Import terms</button>
+          <span id="import-status"></span>
+        </div>
+      </fieldset>
+    </div>
+
+    <script>
+      const base = location.pathname.replace(/\/glossary\/ui\/?$/, "");
+      const tokenKey = "lncrawl.glossary.token";
+      const state = { novelId: null, terms: [], total: 0, offset: 0, pageSize: 200, seq: 0 };
+
+      const $ = (id) => document.getElementById(id);
+      const status = (text) => { $("status").textContent = text || ""; };
+
+      function headers() {
+        return {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sessionStorage.getItem(tokenKey) || ""}`,
+        };
+      }
+
+      async function call(path, init = {}) {
+        const response = await fetch(base + path, { ...init, headers: headers() });
+        if (response.status === 401 || response.status === 403) {
+          throw new Error("Not signed in (or not an admin)");
+        }
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`${response.status}: ${text.slice(0, 200)}`);
+        }
+        const type = response.headers.get("content-type") || "";
+        return type.includes("json") ? response.json() : response.text();
+      }
+
+      async function run(action) {
+        try {
+          await action();
+        } catch (error) {
+          status(String(error.message || error));
+        }
+      }
+
+      async function signIn() {
+        const body = JSON.stringify({ email: $("email").value, password: $("password").value });
+        const response = await fetch(base + "/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        if (!response.ok) throw new Error("Sign in failed");
+        const data = await response.json();
+        sessionStorage.setItem(tokenKey, data.token);
+        showWork();
+      }
+
+      function showWork() {
+        const signedIn = Boolean(sessionStorage.getItem(tokenKey));
+        $("login").style.display = signedIn ? "none" : "";
+        $("work").style.display = signedIn ? "block" : "none";
+        if (signedIn) loadNovels().catch((error) => status(String(error.message || error)));
+      }
+
+      async function loadNovels() {
+        const query = encodeURIComponent($("search").value.trim());
+        const page = await call(`/novels?limit=50&search=${query}`);
+        const list = $("novels");
+        list.innerHTML = "";
+        for (const novel of page.items) {
+          const button = document.createElement("button");
+          button.innerHTML = `${escapeHtml(novel.title)} <small>${novel.chapter_count} chapters · ${novel.language || "?"}</small>`;
+          button.onclick = () => selectNovel(novel, button);
+          list.appendChild(button);
+        }
+        if (!page.items.length) list.innerHTML = '<p class="hint" style="padding:10px">No novels.</p>';
+      }
+
+      function selectNovel(novel, button) {
+        state.novelId = novel.id;
+        state.offset = 0;
+        for (const other of $("novels").children) other.classList.remove("active");
+        button.classList.add("active");
+        $("novel-title").textContent = novel.title;
+        $("coverage").textContent = "";
+        $("status").textContent = "";
+        run(loadExtractors);
+        run(loadCoverage);
+        run(loadTerms);
+      }
+
+      async function loadExtractors() {
+        const list = await call(`/glossary/${state.novelId}/extractors`);
+        const box = $("methods");
+        box.innerHTML = "";
+        for (const method of list.filter((item) => item.kind === "scan")) {
+          const label = document.createElement("label");
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.value = method.id;
+          input.checked = Boolean(method.default) && Boolean(method.available);
+          input.disabled = !method.available;
+          label.append(input, document.createTextNode(` ${method.name}`));
+          label.title = method.reason ? `${method.description} (${method.reason})` : method.description;
+          box.appendChild(label);
+        }
+        if (!box.children.length) box.textContent = "No extraction method can run for this novel.";
+        if (list.some((item) => item.kind === "scan" && item.reason && !item.available)) {
+          $("coverage").textContent = list
+            .filter((item) => item.reason && item.kind === "scan")
+            .map((item) => `${item.name}: ${item.reason}`)
+            .join(" · ");
+        }
+      }
+
+      function selectedMethods() {
+        return Array.from($("methods").querySelectorAll("input:checked")).map((input) => input.value);
+      }
+
+      async function loadCoverage() {
+        const report = await call(`/glossary/${state.novelId}/scan`);
+        const parts = [
+          `${report.scans_total} / ${report.total_chapters} chapters covered`,
+          report.extractors.length ? report.extractors.join(" + ") : "no method",
+        ];
+        parts.push(report.next_serial === null ? "scan finished" : `next: chapter ${report.next_serial}`);
+        $("coverage").textContent = parts.join(" · ");
+      }
+
+      async function scan() {
+        const extractors = selectedMethods();
+        if (!extractors.length) return status("Pick at least one extraction method");
+        const minFreq = parseInt($("scanmin").value, 10);
+        status("Scanning…");
+        const result = await call(`/glossary/${state.novelId}/extract`, {
+          method: "POST",
+          body: JSON.stringify({
+            extractors,
+            limit: parseInt($("limit").value, 10) || 50,
+            min_freq: Number.isFinite(minFreq) ? minFreq : null,
+            force: $("force").checked,
+          }),
+        });
+        const bits = [
+          `read ${result.scanned} chapters`,
+          `${result.terms} terms changed`,
+          `${result.occurrences} occurrences`,
+          `${result.fragments} fragments`,
+          `${result.suppressed} one-offs ignored`,
+        ];
+        if (result.truncated) bits.push(`${result.truncated} over the per-chapter cap`);
+        if (result.unreadable) bits.push(`${result.unreadable} unreadable`);
+        bits.push(`${result.scans_total}/${result.total_chapters} covered`);
+        bits.push(`${result.elapsed_ms} ms`);
+        status(bits.join(" · "));
+        state.offset = 0;
+        await loadCoverage();
+        await loadTerms();
+      }
+
+      async function importTerms() {
+        const terms = $("seed").value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+        if (!terms.length) return;
+        const result = await call(`/glossary/${state.novelId}/import`, {
+          method: "POST",
+          body: JSON.stringify({ terms }),
+        });
+        $("import-status").textContent = `${result.created} added · ${result.existing} already stored · ${result.rejected} rejected before`;
+        $("seed").value = "";
+        await loadTerms();
+      }
+
+      async function loadTerms() {
+        if (!state.novelId) return;
+        const params = new URLSearchParams({
+          language: $("language").value.trim() || "en",
+          search: $("filter").value.trim(),
+          tier: $("tier").value,
+          include_fragments: String($("fragments").checked),
+          min_freq: $("minfreq").value.trim() || "1",
+          categorized: String($("categorized").checked),
+          offset: String(state.offset),
+          limit: String(state.pageSize),
+        });
+        const mine = ++state.seq;
+        const page = await call(`/glossary/${state.novelId}/terms?${params}`);
+        // Switching tier/fragments quickly can leave two requests in flight;
+        // only the newest answer may render, or the table disagrees with the
+        // control that produced it.
+        if (mine !== state.seq) return;
+        state.terms = page.items;
+        state.total = page.total;
+        renderTerms();
+        $("count").textContent = `${page.total} terms${state.offset ? ` · from ${state.offset + 1}` : ""}`;
+        $("prev").disabled = state.offset <= 0;
+        $("next").disabled = state.offset + state.pageSize >= page.total;
+      }
+
+      function renderTerms() {
+        const body = $("terms");
+        body.innerHTML = "";
+        const language = $("language").value.trim() || "en";
+        const minFreq = parseInt($("minfreq").value, 10) || 0;
+        const namesOnly = $("categorized").checked;
+        const terms = state.terms.filter(
+          (term) => term.freq >= minFreq && (!namesOnly || term.category),
+        );
+        if (!state.terms.length) {
+          body.innerHTML = '<tr><td colspan="9" class="hint">No terms yet — run a scan.</td></tr>';
+          return;
+        }
+        if (!terms.length) {
+          body.innerHTML = '<tr><td colspan="9" class="hint">Nothing matches this filter.</td></tr>';
+          return;
+        }
+        for (const term of terms) {
+          const tr = document.createElement("tr");
+
+          const cell = (tag, text, cls) => {
+            const td = document.createElement(tag);
+            if (text !== undefined) td.textContent = text;
+            if (cls) td.className = cls;
+            tr.appendChild(td);
+            return td;
+          };
+
+          const source = cell("td", term.source, "source");
+          if (term.fragment_of) {
+            const hint = document.createElement("div");
+            hint.className = "meta";
+            hint.textContent = `part of ${term.fragment_of}`;
+            source.appendChild(hint);
+          }
+          cell("td", term.pinyin || "");
+          cell("td", term.category || "");
+          cell("td", term.tier || "", "meta");
+          cell("td", term.origin || "", "meta");
+          cell("td", term.freq, "num");
+          cell("td", term.first_chapter_serial ?? "", "num");
+
+          const renderTd = document.createElement("td");
+          const input = document.createElement("input");
+          input.type = "text";
+          input.value = term.rendering || "";
+          input.size = 16;
+          input.placeholder = term.candidates[0] || "";
+          input.title = term.candidates.length ? "Candidates: " + term.candidates.join(" · ") : "";
+          renderTd.appendChild(input);
+          if (term.locked) {
+            const badge = document.createElement("span");
+            badge.className = "lock";
+            badge.textContent = " locked";
+            renderTd.appendChild(badge);
+          }
+          if (term.candidates.length && !term.rendering) {
+            const hint = document.createElement("div");
+            hint.className = "cand";
+            hint.textContent = term.candidates.slice(0, 2).join(" · ");
+            renderTd.appendChild(hint);
+          }
+          tr.appendChild(renderTd);
+
+          const actions = document.createElement("td");
+          const save = document.createElement("button");
+          save.textContent = "Save";
+          save.onclick = () => run(async () => {
+            await call(`/glossary/${state.novelId}/terms/${term.id}?language=${language}`, {
+              method: "PUT",
+              body: JSON.stringify({ rendering: input.value }),
+            });
+            status("Saved " + term.source);
+            await loadTerms();
+          });
+          const reject = document.createElement("button");
+          reject.textContent = "Reject";
+          reject.className = "danger";
+          reject.style.marginLeft = "6px";
+          reject.title = "Not a term: delete it and never propose it again";
+          reject.onclick = () => run(async () => {
+            await call(`/glossary/${state.novelId}/terms/${term.id}/reject`, {
+              method: "POST",
+              body: JSON.stringify({ reason: "rejected in review" }),
+            });
+            status("Rejected " + term.source);
+            await loadTerms();
+          });
+          actions.append(save, reject);
+          tr.appendChild(actions);
+          body.appendChild(tr);
+        }
+      }
+
+      function escapeHtml(text) {
+        return String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+      }
+
+      $("signin").onclick = () => run(signIn);
+      $("find").onclick = () => run(loadNovels);
+      $("refresh").onclick = () => run(loadTerms);
+      $("extract").onclick = () => run(scan);
+      $("import").onclick = () => run(importTerms);
+      $("filter").oninput = () => { clearTimeout(window._t); window._t = setTimeout(() => { state.offset = 0; run(loadTerms); }, 300); };
+      $("language").onchange = () => { state.offset = 0; run(loadTerms); };
+      $("tier").onchange = () => { state.offset = 0; run(loadTerms); };
+      $("fragments").onchange = () => { state.offset = 0; run(loadTerms); };
+      $("minfreq").oninput = () => renderTerms();
+      $("categorized").onchange = () => renderTerms();
+      $("prev").onclick = () => { state.offset = Math.max(0, state.offset - state.pageSize); run(loadTerms); };
+      $("next").onclick = () => { state.offset += state.pageSize; run(loadTerms); };
+
+      showWork();
+    </script>
+  </body>
+</html>

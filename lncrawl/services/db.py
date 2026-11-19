@@ -158,12 +158,18 @@ class DB:
         sync has created the tables. It only runs while the schema fingerprint
         is stale, i.e. once per upgrade, and retries if it fails.
         """
-        from ..utils.glossary_tools import backfill_legacy_glossaries
+        from ..utils.glossary_tools import (
+            backfill_legacy_glossaries,
+            reset_unbacked_frequencies,
+        )
 
         with self.engine.begin() as conn:
             count = backfill_legacy_glossaries(conn)
+            cleared = reset_unbacked_frequencies(conn)
         if count:
             logger.info(f"Backfilled {count} legacy glossary term(s) into rows.")
+        if cleared:
+            logger.info(f"Cleared {cleared} glossary frequency cache(s) no scan backs.")
 
     def _bootstrap_server(self, reset_on_failure: bool = False):
         """Run real Alembic migrations for Postgres/MySQL deployments."""

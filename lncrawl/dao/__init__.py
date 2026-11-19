@@ -12,8 +12,10 @@ from .chapter_image import ChapterImage
 from .glossary import (
     GlossaryCandidate,
     GlossaryEntry,
+    GlossaryOccurrence,
     GlossaryOverride,
     GlossaryRevision,
+    GlossaryScan,
     GlossaryTerm,
 )
 from .job import Job
@@ -42,6 +44,8 @@ models: List[Type[SQLModel]] = [
     GlossaryCandidate,
     GlossaryOverride,
     GlossaryRevision,
+    GlossaryScan,
+    GlossaryOccurrence,
     Volume,
     VolumeTranslation,
     Chapter,

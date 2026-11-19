@@ -7,6 +7,8 @@ from ...utils.proxy_tools import ProxyExit
 from ..models import (
     ConfigSection,
     ConfigUpdateRequest,
+    GeminiKeyPruneResult,
+    GeminiKeyStatus,
     ProxyItem,
 )
 from ..models.activity import (
@@ -76,6 +78,26 @@ def patch_configs(
     body: List[ConfigUpdateRequest] = Body(...),
 ) -> None:
     ctx.admin.update_config(body)
+
+
+@router.post(
+    "/translator/keys/check",
+    summary="Check every stored Gemini API key",
+)
+def check_translator_keys() -> List[GeminiKeyStatus]:
+    rows = [GeminiKeyStatus(**row) for row in ctx.translator.check_gemini_keys()]
+    ctx.admin.refresh_configs()  # the status field caches its text in the settings list
+    return rows
+
+
+@router.post(
+    "/translator/keys/prune",
+    summary="Remove the Gemini API keys the check rejected",
+)
+def prune_translator_keys() -> GeminiKeyPruneResult:
+    result = GeminiKeyPruneResult(**ctx.translator.prune_gemini_keys())
+    ctx.admin.refresh_configs()
+    return result
 
 
 ActivityDataType = Literal[

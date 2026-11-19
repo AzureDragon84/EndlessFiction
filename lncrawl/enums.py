@@ -159,6 +159,11 @@ class TermCategory(str, Enum):
     special = "special"
 
 
+class TermTier(str, Enum):
+    core = "core"
+    tail = "tail"
+
+
 class TermGender(str, Enum):
     unknown = "unknown"
     male = "male"

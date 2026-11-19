@@ -7,6 +7,7 @@ from .artifacts import router as artifact
 from .auth import router as auth
 from .chapters import router as chapter
 from .feedback import router as feedback
+from .glossary import router as glossary_api, ui_router as glossary_ui
 from .history import router as history
 from .jobs import router as job
 from .libraries import router as library
@@ -55,6 +56,21 @@ router.include_router(
     novel,
     prefix="/novel",
     tags=["Novels"],
+    dependencies=[Security(ensure_user)],
+)
+
+# The review page is an empty shell until it signs in, so it is served without auth;
+# everything it calls is gated.
+router.include_router(
+    glossary_ui,
+    prefix="/glossary",
+    tags=["Glossary"],
+)
+
+router.include_router(
+    glossary_api,
+    prefix="/glossary",
+    tags=["Glossary"],
     dependencies=[Security(ensure_user)],
 )
 

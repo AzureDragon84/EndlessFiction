@@ -18,6 +18,18 @@ if TYPE_CHECKING:
         FeedbackRespondRequest,
         FeedbackUpdateRequest,
     )
+    from .glossary import (
+        GlossaryExtractorInfo,
+        GlossaryImportRequest,
+        GlossaryImportResult,
+        GlossaryRejectRequest,
+        GlossaryScanRequest,
+        GlossaryScanResult,
+        GlossaryScanStatus,
+        GlossaryTermInfo,
+        GlossaryTermPage,
+        GlossaryTermUpdate,
+    )
     from .history import ContinueReadingResponse, ReadHistoryNovel
     from .job import (
         FetchChaptersRequest,
@@ -45,6 +57,7 @@ if TYPE_CHECKING:
         SourceDiagnosis,
         SourceItem,
     )
+    from .translator import GeminiKeyPruneResult, GeminiKeyStatus
     from .user import (
         CreateRequest,
         ForgotPasswordRequest,
@@ -123,6 +136,20 @@ __all__ = [
     # history
     "ContinueReadingResponse",
     "ReadHistoryNovel",
+    # translator key pool
+    "GeminiKeyStatus",
+    "GeminiKeyPruneResult",
+    # glossary review
+    "GlossaryTermInfo",
+    "GlossaryTermPage",
+    "GlossaryTermUpdate",
+    "GlossaryRejectRequest",
+    "GlossaryExtractorInfo",
+    "GlossaryScanRequest",
+    "GlossaryScanResult",
+    "GlossaryScanStatus",
+    "GlossaryImportRequest",
+    "GlossaryImportResult",
 ]
 
 # name -> submodule holding it (relative to this package)
@@ -156,6 +183,18 @@ _LAZY: dict[str, str] = {
     "LibraryItem": ".library",
     "LibraryUpdateRequest": ".library",
     "ReadChapterResponse": ".novel",
+    "GlossaryTermInfo": ".glossary",
+    "GlossaryTermPage": ".glossary",
+    "GlossaryTermUpdate": ".glossary",
+    "GlossaryRejectRequest": ".glossary",
+    "GlossaryExtractorInfo": ".glossary",
+    "GlossaryScanRequest": ".glossary",
+    "GlossaryScanResult": ".glossary",
+    "GlossaryScanStatus": ".glossary",
+    "GlossaryImportRequest": ".glossary",
+    "GlossaryImportResult": ".glossary",
+    "GeminiKeyStatus": ".translator",
+    "GeminiKeyPruneResult": ".translator",
     "Paginated": ".pagination",
     "AppInfo": ".sources",
     "CrawlerIndex": ".sources",

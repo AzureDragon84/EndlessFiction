@@ -2,7 +2,7 @@ from typing import Optional
 
 import sqlmodel as sa
 
-from ..enums import TermCategory, TermGender, TermStrategy
+from ..enums import TermCategory, TermGender, TermStrategy, TermTier
 from ._base import BaseTable
 
 
@@ -32,9 +32,24 @@ class GlossaryTerm(BaseTable, table=True):
         sa_column=sa.Column(sa.Enum(TermCategory, native_enum=False), nullable=True),
         description="What kind of thing the term names",
     )
-    freq: int = sa.Field(default=0, description="Occurrences seen across crawled chapters")
+    freq: int = sa.Field(
+        default=0,
+        description="Derived cache: occurrences summed over `glossary_occurrences`",
+    )
     first_chapter_serial: Optional[int] = sa.Field(
-        default=None, description="Chapter this term was first seen in"
+        default=None, description="Derived cache: lowest chapter serial that has a scan"
+    )
+    tier: TermTier = sa.Field(
+        default=TermTier.core,
+        sa_column=sa.Column(
+            sa.Enum(TermTier, native_enum=False), nullable=False, server_default="core"
+        ),
+        description="core when a chapter reached the scan threshold, tail when only a harvest pass saw it",
+    )
+    origin: str = sa.Field(
+        default="frequency",
+        sa_column=sa.Column(sa.String, nullable=False, server_default="frequency"),
+        description="Extraction method that first proposed the surface",
     )
     fragment_of: Optional[str] = sa.Field(
         default=None,
@@ -43,6 +58,58 @@ class GlossaryTerm(BaseTable, table=True):
         nullable=True,
         description="Canonical term this surface is a fragment of",
     )
+
+
+class GlossaryScan(BaseTable, table=True):
+    """One (chapter, method) pass: the unit of scan coverage.
+
+    A chapter counts as covered for a method once its row exists, which is what
+    lets a scan resume where the last one stopped instead of re-reading chapters
+    it already handled. The counters are what the review screen reports, and
+    `content_hash` is what a later staleness check compares the stored chapter
+    file against.
+    """
+
+    __tablename__ = "glossary_scans"  # type: ignore
+    __table_args__ = (
+        sa.UniqueConstraint("novel_id", "serial", "extractor"),
+        sa.Index("ix_glossary_scan_novel_serial", "novel_id", "serial"),
+    )
+
+    novel_id: str = sa.Field(foreign_key="novels.id", ondelete="CASCADE")
+    serial: int = sa.Field(description="Chapter serial this pass read")
+    extractor: str = sa.Field(description="Extraction method that produced the pass")
+    content_hash: Optional[str] = sa.Field(
+        default=None, description="Digest of the text read, for staleness checks"
+    )
+    terms: int = sa.Field(default=0, description="Stored terms this method proposed in the chapter")
+    occurrences: int = sa.Field(
+        default=0,
+        description="Occurrences this method saw; methods overlap, so rows do not add up",
+    )
+    fragments: int = sa.Field(
+        default=0, description="Surfaces this method put inside a longer term"
+    )
+    suppressed: int = sa.Field(default=0, description="Surfaces this method saw but did not store")
+    truncated: int = sa.Field(
+        default=0,
+        description="Surfaces the per-chapter backstop dropped; recorded once per chapter",
+    )
+
+
+class GlossaryOccurrence(BaseTable, table=True):
+    """How often a term appeared in one chapter scan — the rows `freq` derives from."""
+
+    __tablename__ = "glossary_occurrences"  # type: ignore
+    __table_args__ = (
+        sa.UniqueConstraint("scan_id", "term_id"),
+        sa.Index("ix_glossary_occurrence_scan", "scan_id"),
+        sa.Index("ix_glossary_occurrence_term", "term_id"),
+    )
+
+    scan_id: str = sa.Field(foreign_key="glossary_scans.id", ondelete="CASCADE")
+    term_id: str = sa.Field(foreign_key="glossary_terms.id", ondelete="CASCADE")
+    count: int = sa.Field(default=0, description="Occurrences of the surface in that chapter")
 
 
 class GlossaryEntry(BaseTable, table=True):

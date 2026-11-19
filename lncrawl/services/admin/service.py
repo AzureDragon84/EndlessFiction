@@ -16,6 +16,15 @@ class AdminService:
     def config_sections(self):
         return list_config_sections()
 
+    def refresh_configs(self) -> None:
+        """Drop the cached sections after a change made outside the settings page.
+
+        The settings list carries values, so anything that writes config (the
+        translator key pool, a key check) has to invalidate it or the page keeps
+        reporting the state it was first read in.
+        """
+        list_config_sections.cache_clear()
+
     def update_config(self, body: List[ConfigUpdateRequest]):
         for change in body:
             update_config(change.section, change.key, change.value, dry_run=True)

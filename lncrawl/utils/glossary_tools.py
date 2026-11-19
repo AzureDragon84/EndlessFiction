@@ -149,3 +149,31 @@ def backfill_legacy_glossaries(conn: sa.Connection) -> int:
                 )
 
     return created
+
+
+def reset_unbacked_frequencies(conn: sa.Connection) -> int:
+    """Clear the frequency cache of every term no stored scan has counted.
+
+    The old pre-pass added a chapter's count to `freq` on every run, so the same
+    text could be counted twice. `freq` is now derived from
+    `glossary_occurrences`, which means a term without an occurrence row has no
+    reproducible number — keeping the old one would put two different meanings
+    in one column, sorted together in the review list. A cleared term is
+    repopulated by the next scan of the chapters it appears in.
+
+    Idempotent: a cleared row stops matching, and new terms start at zero.
+    """
+    inspector = sa.inspect(conn)
+    if not all(inspector.has_table(name) for name in _REQUIRED_TABLES):
+        return 0
+    if not inspector.has_table("glossary_occurrences"):
+        return 0
+
+    meta = sa.MetaData()
+    terms = sa.Table("glossary_terms", meta, autoload_with=conn)
+    occurrences = sa.Table("glossary_occurrences", meta, autoload_with=conn)
+    counted = sa.select(occurrences.c.term_id)
+    result = conn.execute(
+        sa.update(terms).where(terms.c.freq != 0).where(terms.c.id.notin_(counted)).values(freq=0)
+    )
+    return int(result.rowcount or 0)

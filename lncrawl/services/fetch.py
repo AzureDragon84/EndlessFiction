@@ -40,6 +40,18 @@ class FetchService:
         resp.raise_for_status()
         return resp.content
 
+    def get_response(
+        self,
+        url: str,
+        signal: Optional[Event] = None,
+        **kwargs: Any,
+    ) -> requests.Response:
+        """A raw GET response, for callers that must read the status code.
+
+        Used by the translator API-key probe: a rejected key is a 4xx, not an error.
+        """
+        return ctx.scraper.plain().get(url, signal=signal, **kwargs)
+
     def download(
         self,
         url: str,

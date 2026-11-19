@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import time
 from typing import Annotated, Any, Callable, List, Optional, Tuple, Type, TypeVar, cast
 import uuid
@@ -31,6 +32,17 @@ APP_DIR = Path(
     )
 ).absolute()
 DEFAULT_CONFIG_FILE = APP_DIR / "config.json"
+# The translator keeps providers, engines, routing and their keys in its own file.
+TRANSLATOR_CONFIG_FILE = APP_DIR / "translator.yml"
+# Results of the last Gemini key check; probe output, not configuration.
+TRANSLATOR_KEY_STATUS_FILE = APP_DIR / "translator-keys.json"
+# Gemini models the key pool feeds, best first. Ordered: a model is exhausted
+# across every key before the next model is used.
+DEFAULT_GEMINI_MODELS = (
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+)
 
 
 class Sensitive:
@@ -362,6 +374,137 @@ class AppConfig(_Section):
 # ------------------------------------------------------------------ #
 #                         Translator Section                         #
 # ------------------------------------------------------------------ #
+def split_lines(value: str) -> List[str]:
+    """Clean, de-duplicated items of a multi-line or comma/space separated value."""
+    lines: List[str] = []
+    for item in re.split(r"[\s,;]+", str(value or "")):
+        item = item.strip()
+        if item and item not in lines:
+            lines.append(item)
+    return lines
+
+
+def _load_translator_config():
+    """The translator config, or None when it does not exist or cannot be read."""
+    if not TRANSLATOR_CONFIG_FILE.exists():
+        return None
+    try:
+        from translator.config import load_config
+
+        return load_config(TRANSLATOR_CONFIG_FILE)
+    except Exception:
+        # A hand-edited file must not take the settings page down with it.
+        logger.exception("Unable to read the translator config")
+        return None
+
+
+def _translator_api_keys() -> dict:
+    """Provider API keys stored in the translator's config file."""
+    config = _load_translator_config()
+    if config is None:
+        return {}
+    return {p.id: str(p.api_key or "") for p in config.providers}
+
+
+def _gemini_pool_keys() -> List[str]:
+    """Keys currently in the Gemini pool, in pool order."""
+    config = _load_translator_config()
+    if config is None:
+        return []
+    providers = [p for p in config.providers if p.id.startswith("gemini-pool-")]
+    return [str(p.api_key or "") for p in sorted(providers, key=lambda p: p.id)]
+
+
+def _gemini_key_preview(key: str) -> str:
+    """First and last four characters of a key, enough to tell two keys apart.
+
+    The settings page edits every value in a single-line input, so the pool is shown
+    as a comma separated list of previews. Never the key itself: a preview is only
+    ever written back as the key it came from.
+    """
+    key = str(key or "")
+    if len(key) < 12:
+        return "********"
+    return f"{key[:4]}\u2026{key[-4:]}"
+
+
+def _gemini_key_status_text() -> str:
+    """The last key check, as one line per key for the settings page."""
+    if not TRANSLATOR_KEY_STATUS_FILE.exists():
+        return "No key check has run yet."
+    try:
+        data = json.loads(TRANSLATOR_KEY_STATUS_FILE.read_text(encoding="utf-8"))
+        rows = list(data.get("rows") or [])
+        checked_at = int(data.get("checked_at") or 0)
+    except Exception:
+        return "The last key check could not be read."
+    if not rows:
+        return "No Gemini keys stored."
+    states = {True: "alive", False: "dead", None: "unknown"}
+    header = (
+        f"Checked {datetime.fromtimestamp(checked_at / 1000):%Y-%m-%d %H:%M}" if checked_at else ""
+    )
+    lines = [header] if header else []
+    for row in rows:
+        detail = str(row.get("error") or "")
+        state = states.get(row.get("alive"), "unknown")
+        lines.append(
+            f"{row.get('provider')} {row.get('fingerprint')} {state}"
+            + (f" {detail}" if detail else "")
+        )
+    # Joined rather than newline separated: the settings page edits values in a
+    # single-line input, which would otherwise glue the lines together.
+    return " | ".join(lines)
+
+
+def _save_translator_api_key(provider: str, api_key: str) -> None:
+    """Write one provider key into the translator config, dashboard included.
+
+    The file is the single source of truth: it is written as a sparse overlay, so
+    engines and routing configured in the dashboard survive, and a running engine
+    is asked to swap the new config in instead of waiting for a restart.
+    """
+    from translator.config import load_config, save_config
+
+    config = load_config(TRANSLATOR_CONFIG_FILE)
+    entry = config.provider(provider)
+    if entry is None:
+        raise ValueError(f"Unknown translator provider: {provider}")
+    entry.api_key = api_key or None
+    save_config(config, TRANSLATOR_CONFIG_FILE)
+
+    from .context import ctx
+
+    if "translator" in ctx.__dict__:
+        ctx.translator.reload_config()
+
+
+def _translator_api_key(provider: str, label: str, description: str) -> property:
+    """A masked API-key property over one translator provider's `api_key`.
+
+    Generated rather than repeated because the getter and setter never vary: the
+    key lives in the translator's own config, so the settings page and the
+    translator dashboard cannot disagree about it.
+    """
+
+    def getter(self: TranslatorConfig) -> Annotated[str, Sensitive]:
+        return _translator_api_keys().get(provider, "")
+
+    def setter(self: TranslatorConfig, value: str) -> None:
+        key = str(value or "").strip()
+        if "********" in key:
+            # The settings API returns a masked key; saving it back must not
+            # overwrite the real one.
+            return
+        if key == _translator_api_keys().get(provider, ""):
+            return
+        _save_translator_api_key(provider, key)
+
+    # The settings API reads the docstring off the getter to build the label and help text.
+    getter.__doc__ = f"{label}.\n\n{description}"
+    return property(getter, setter)
+
+
 class TranslatorConfig(_Section):
     section = "translator"
 
@@ -370,10 +513,112 @@ class TranslatorConfig(_Section):
         """Translator Config File.
 
         Path of the embedded translator's YAML config (providers, API keys, engines,
-        routing). Managed through the translator dashboard; the file is created on
-        first change. Default lives in the app data directory.
+        routing). Written by the translator dashboard and by the API key settings below;
+        the file is created on first change. Default lives in the app data directory.
         """
-        return str(APP_DIR / "translator.yml")
+        return str(TRANSLATOR_CONFIG_FILE)
+
+    @property
+    def gemini_models(self) -> str:
+        """Gemini Models.
+
+        Models the Gemini key pool feeds, comma separated, best first. Every key is
+        tried on the first model before the second model is used, so this list is the
+        quality order and the keys are only a quota spread. Saving rebuilds the pool's
+        engines and routing.
+        """
+        return ", ".join(split_lines(self._get("gemini_models", "\n".join(DEFAULT_GEMINI_MODELS))))
+
+    @gemini_models.setter
+    def gemini_models(self, v: str) -> None:
+        models = split_lines(v)
+        if models == split_lines(self.gemini_models):
+            return
+        self._set("gemini_models", "\n".join(models))
+        from .context import ctx
+
+        ctx.translator.sync_gemini_pool()
+
+    @property
+    def gemini_api_keys(self) -> str:
+        """Gemini API Keys.
+
+        Google AI Studio keys, comma separated (new lines work too); there is no
+        practical upper bound below 100. Each key becomes its own provider so the
+        translator paces them separately, and every model gets one engine per key.
+        Stored keys are shown as their first and last four characters: add a key by
+        appending it, drop one by deleting its preview. Saving replaces the pool, so a
+        key you remove loses its provider and engines. Use the key check to see which
+        stored keys still work.
+        """
+        return ", ".join(_gemini_key_preview(key) for key in _gemini_pool_keys())
+
+    @gemini_api_keys.setter
+    def gemini_api_keys(self, v: str) -> None:
+        stored = _gemini_pool_keys()
+        known = {_gemini_key_preview(key): key for key in stored}
+        keys: List[str] = []
+        for item in split_lines(v):
+            key = known.get(item)
+            if key is None:
+                if "\u2026" in item or "********" in item:
+                    # A preview of a key that is no longer stored: writing it would
+                    # create a provider around a fragment.
+                    continue
+                key = item
+            if key not in keys:
+                keys.append(key)
+        if keys == stored:
+            return
+        from .context import ctx
+
+        ctx.translator.sync_gemini_pool(keys=keys)
+
+    @property
+    def gemini_key_status(self) -> str:
+        """Gemini Key Status.
+
+        Result of the last key check: one line per stored key, marked alive, dead or
+        unknown. Read-only; run the check from the admin API (`POST
+        /api/admin/translator/keys/check`) and prune with `.../keys/prune`.
+        """
+        return _gemini_key_status_text()
+
+    @gemini_key_status.setter
+    def gemini_key_status(self, v: str) -> None:
+        # A display of probe output, not a setting: writes are accepted and ignored.
+        pass
+
+    deepl_api_key = _translator_api_key(
+        "deepl",
+        "DeepL API Key",
+        "DeepL key for the machine-translation fallback lane.",
+    )
+
+    groq_api_key = _translator_api_key(
+        "groq",
+        "Groq API Key",
+        "console.groq.com key. Fast with a small daily token budget, so it suits titles "
+        "and short text more than whole chapters.",
+    )
+
+    openrouter_api_key = _translator_api_key(
+        "openrouter",
+        "OpenRouter API Key",
+        "openrouter.ai key for its free model lane.",
+    )
+
+    sambanova_api_key = _translator_api_key(
+        "sambanova",
+        "SambaNova API Key",
+        "cloud.sambanova.ai key; a small free daily request budget per model.",
+    )
+
+    chutes_api_key = _translator_api_key(
+        "chutes",
+        "Chutes API Key",
+        "chutes.ai key for open-weight models, which read CJK sources well.",
+    )
 
     @property
     def enabled(self) -> bool:

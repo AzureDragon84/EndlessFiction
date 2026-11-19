@@ -1,5 +1,5 @@
 import shutil
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import sqlmodel as sq
 
@@ -7,6 +7,7 @@ from ..context import ctx
 from ..dao import (
     Artifact,
     ChapterTranslation,
+    GlossaryCandidate,
     GlossaryEntry,
     GlossaryTerm,
     LanguageCode,
@@ -14,6 +15,7 @@ from ..dao import (
     NovelSort,
     NovelTag,
     NovelTranslation,
+    TermTier,
     VolumeTranslation,
 )
 from ..exceptions import ServerErrors
@@ -25,6 +27,11 @@ from .glossary import (
     decide_manually,
     get_or_create_term,
     glossary_lock,
+    glossary_scan_status,
+    import_glossary_terms,
+    reject_term,
+    scan_novel_terms,
+    term_lock,
 )
 
 
@@ -198,6 +205,208 @@ class NovelService:
                 glossaries.setdefault(lang, {})[source] = rendering
         return glossaries
 
+    def list_glossary_extractors(self, novel_id: str) -> List[Dict[str, Any]]:
+        """The extraction methods available for this novel's script."""
+        from .glossary_extract import describe_extractors
+
+        with ctx.db.session() as sess:
+            novel = sess.get(Novel, novel_id)
+        if novel is None:
+            raise ServerErrors.no_such_novel
+        return describe_extractors(novel.language or None)
+
+    def list_glossary_terms(
+        self,
+        novel_id: str,
+        language: str,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        search: str = "",
+        tier: str = "all",
+        include_fragments: bool = False,
+        min_freq: int = 1,
+        categorized: bool = False,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """One page of a novel's terms with their decision in `language`.
+
+        This is what the review screen lists: source and metadata always, the
+        rendering and lock when one exists, and the engine's alternatives as
+        candidate renderings. Fragments — surfaces a longer kept term already
+        accounts for — are hidden unless asked for, and a `tier` filter is what
+        keeps the long tail out of the way. An unbacked term (no occurrence is
+        left, so no scan proposes it any more) is hidden until the next scan
+        finds it again; imported terms are never hidden that way.
+        """
+        with ctx.db.session() as sess:
+            conditions = [sq.col(GlossaryTerm.novel_id) == novel_id]
+            needle = search.strip()
+            if needle:
+                conditions.append(sq.col(GlossaryTerm.source).ilike(f"%{needle}%"))
+            if tier in {
+                TermTier.core.value,
+                TermTier.tail.value,
+            }:
+                conditions.append(sq.col(GlossaryTerm.tier) == TermTier(tier))
+            if not include_fragments:
+                conditions.append(sq.col(GlossaryTerm.fragment_of).is_(None))
+            if min_freq > 0:
+                conditions.append(
+                    sq.or_(
+                        sq.col(GlossaryTerm.freq) >= min_freq,
+                        sq.col(GlossaryTerm.origin) == "seed",
+                    )
+                )
+            if categorized:
+                conditions.append(sq.col(GlossaryTerm.category).is_not(None))
+
+            total = sess.exec(
+                sq.select(sq.func.count()).select_from(GlossaryTerm).where(*conditions)
+            ).one()
+            rows = sess.exec(
+                sq.select(GlossaryTerm, GlossaryEntry)
+                .join(
+                    GlossaryEntry,
+                    (sq.col(GlossaryEntry.term_id) == sq.col(GlossaryTerm.id))
+                    & (sq.col(GlossaryEntry.language) == language),
+                    isouter=True,
+                )
+                .where(*conditions)
+                .order_by(sq.col(GlossaryTerm.freq).desc(), sq.col(GlossaryTerm.source))
+                .offset(offset)
+                .limit(limit)
+            ).all()
+
+            term_ids = [term.id for term, _ in rows]
+            candidates: Dict[str, List[str]] = {}
+            if term_ids:
+                for term_id, rendering in sess.exec(
+                    sq.select(GlossaryCandidate.term_id, GlossaryCandidate.rendering)
+                    .where(
+                        sq.col(GlossaryCandidate.term_id).in_(term_ids),
+                        sq.col(GlossaryCandidate.language) == language,
+                    )
+                    .order_by(
+                        sq.col(GlossaryCandidate.chosen).desc(),
+                        sq.col(GlossaryCandidate.votes).desc(),
+                    )
+                ).all():
+                    candidates.setdefault(term_id, []).append(rendering)
+
+            parents: Dict[str, str] = {}
+            parent_ids = {term.fragment_of for term, _ in rows if term.fragment_of}
+            if parent_ids:
+                for parent_id, source in sess.exec(
+                    sq.select(GlossaryTerm.id, GlossaryTerm.source).where(
+                        sq.col(GlossaryTerm.id).in_(list(parent_ids))
+                    )
+                ).all():
+                    parents[str(parent_id)] = source
+
+        items = [
+            {
+                "id": term.id,
+                "source": term.source,
+                "pinyin": term.pinyin,
+                "category": term.category,
+                # SQLite's additive reconcile adds new columns NULLable, so a
+                # row written by an older build can carry NULL here.
+                "tier": term.tier or TermTier.core,
+                "origin": term.origin or "frequency",
+                "fragment_of": parents.get(term.fragment_of or "") or None,
+                "freq": term.freq,
+                "first_chapter_serial": term.first_chapter_serial,
+                "rendering": entry.rendering if entry else None,
+                "locked": bool(entry and entry.locked),
+                "candidates": candidates.get(term.id, []),
+            }
+            for term, entry in rows
+        ]
+        return items, int(total)
+
+    def extract_glossary_terms(
+        self,
+        novel_id: str,
+        *,
+        extractors: Optional[List[str]] = None,
+        limit: int = 50,
+        min_freq: Optional[int] = None,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """Scan stored chapters for terms; returns the scan report."""
+        return scan_novel_terms(
+            novel_id,
+            extractors=extractors,
+            limit=limit,
+            min_freq=min_freq,
+            force=force,
+        )
+
+    def glossary_scan_status(
+        self,
+        novel_id: str,
+        extractors: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """How much of the novel the chosen methods have covered."""
+        return glossary_scan_status(novel_id, extractors=extractors)
+
+    def import_glossary_terms(self, novel_id: str, terms: List[str]) -> Dict[str, int]:
+        """Store a pasted term list without reading a chapter."""
+        return import_glossary_terms(novel_id, terms)
+
+    def update_glossary_term(
+        self,
+        novel_id: str,
+        term_id: str,
+        language: LanguageCode,
+        rendering: Optional[str],
+        *,
+        user_id: Optional[str] = None,
+    ) -> bool:
+        """Decide one term in one language; an empty rendering undecides it.
+
+        Same invariants as `update_glossary`, just for a single row: the write is
+        locked, versioned and logged.
+        """
+        lang = language.value
+        value = (rendering or "").strip() or None
+        with glossary_lock(novel_id, lang), ctx.db.session() as sess:
+            term = sess.get(GlossaryTerm, term_id)
+            if term is None or term.novel_id != novel_id:
+                raise ServerErrors.invalid_input.with_extra("Unknown glossary term")
+            entry = sess.exec(
+                sq.select(GlossaryEntry).where(
+                    sq.col(GlossaryEntry.term_id) == term_id,
+                    sq.col(GlossaryEntry.language) == lang,
+                )
+            ).first()
+            if value is None:
+                if entry is None or (entry.rendering is None and not entry.locked):
+                    return False
+                decide_manually(sess, entry, None, user_id=user_id)
+            elif entry is None:
+                create_manual_entry(sess, term.id, lang, value, user_id=user_id)
+            elif (entry.rendering, entry.locked) != (value, True):
+                decide_manually(sess, entry, value, user_id=user_id)
+            else:
+                return False
+            bump_revision(sess, novel_id, lang)
+            sess.commit()
+            return True
+
+    def reject_glossary_term(
+        self,
+        novel_id: str,
+        term_id: str,
+        reason: Optional[str] = None,
+    ) -> bool:
+        """Delete a term and remember its surface as a false positive."""
+        with term_lock(novel_id), ctx.db.session() as sess:
+            if not reject_term(sess, novel_id, term_id, reason):
+                return False
+            sess.commit()
+            return True
+
     def update_glossary(
         self,
         novel_id: str,
@@ -252,7 +461,7 @@ class NovelService:
                     changed += 1
 
             for source_key, rendering in pending.items():
-                term = get_or_create_term(sess, novel_id, sources[source_key])
+                term = get_or_create_term(sess, novel_id, sources[source_key], origin="manual")
                 create_manual_entry(sess, term.id, lang, rendering, user_id=user_id)
                 changed += 1
 
