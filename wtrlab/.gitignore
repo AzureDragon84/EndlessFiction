@@ -1,0 +1,6 @@
+# The repository root ignores `package.json` because the Python package never had one.
+# The web app does ship one, so re-include it here.
+!package.json
+node_modules/
+dist/
+*.local

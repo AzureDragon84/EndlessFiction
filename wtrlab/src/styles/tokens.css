@@ -1,0 +1,50 @@
+/* Design tokens sampled from wtr-lab.com's rendered styles (Bootstrap-era palette). */
+:root {
+  /* Surfaces */
+  --bg: #f2f3f4;
+  --surface: #ffffff;
+  --surface-2: #f8f9fa;
+  --surface-3: #f1f3f4;
+  --border: #d4dadb;
+  --border-soft: #e6eaeb;
+  --border-strong: #c9d0d2;
+
+  /* Header */
+  --header-bg: #212529;
+  --header-field: #2b3035;
+  --header-border: rgba(255, 255, 255, 0.12);
+  --header-text: rgba(255, 255, 255, 0.55);
+  --header-text-hover: rgba(255, 255, 255, 0.92);
+
+  /* Text */
+  --text: #1b1d23;
+  --heading: #212529;
+  --muted: #6c757d;
+  --muted-2: #8d969e;
+
+  /* Accents */
+  --primary: #0d6efd;
+  --primary-dark: #0a58ca;
+  --primary-soft: #e7f1ff;
+  --success: #198754;
+  --success-soft: #e8f5ee;
+  --warning: #e8890c;
+  --warning-bright: #f59e0b;
+  --warning-soft: #fff8ee;
+  --warning-border: #f3ddbd;
+  --danger: #dc3545;
+  --danger-soft: #fdecee;
+  --star: #ffc107;
+
+  /* Metrics */
+  --radius: 5px;
+  --radius-sm: 4px;
+  --radius-lg: 8px;
+  --header-h: 57px;
+  --container: 1280px;
+  --rail: 340px;
+  --gap: 12px;
+  --font: 'Nunito Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 8px 24px rgba(16, 24, 40, 0.14);
+}
