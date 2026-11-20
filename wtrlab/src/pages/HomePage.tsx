@@ -117,11 +117,11 @@ function LatestUpdates() {
 function FeatureTiles() {
   return (
     <div className="home-actions">
-      <Link to="/novels" className="feature-tile feature-tile--tall">
+      <Link to="/novels" className="feature-tile feature-tile--tall feature-tile--vote">
         <i className="bi bi-box-arrow-in-down" />
         <span>Vote Novels</span>
       </Link>
-      <Link to="/novel-finder" className="feature-tile feature-tile--tall">
+      <Link to="/novel-finder" className="feature-tile feature-tile--tall feature-tile--request">
         <i className="bi bi-plus-circle-dotted" />
         <span>Request Novels</span>
       </Link>
