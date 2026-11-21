@@ -17,6 +17,7 @@ class ChapterTranslationBatchHandler(BatchHandler):
         if not language:
             raise HandlerException("No target language")
 
+        mode = self.job.extra.get("mode") or "ai"
         added_chapters = set()
         if self.job.is_running:
             added_chapters = set([job.extra.get("chapter_id") for job in self.children])
@@ -34,6 +35,7 @@ class ChapterTranslationBatchHandler(BatchHandler):
                 self.user,
                 chapter_id,
                 language,
+                mode=mode,
                 parent_id=self.job.id,
                 novel_title=self.job.extra.get("novel_title"),
             )

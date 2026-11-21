@@ -5,6 +5,16 @@
 > pull upstream updates with `git fetch upstream dev && git merge upstream/dev`.
 > Everything below is upstream's own documentation.
 
+## Run it in Colab
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AzureDragon84/EndlessFiction/blob/project-alpha/colab.ipynb)
+
+[`colab.ipynb`](colab.ipynb) boots this server in a free Colab runtime, keeps its data in the
+`data` folder of your Google Drive, and publishes it at a public
+`https://&hellip;.trycloudflare.com` address — the notebook prints the link, and `/admin` is the
+Admin Dashboard. It runs exactly this code: the Cloudflare tunnel is only the front door, and
+no account or token is needed.
+
 <div align="center">
 
 <img src="https://raw.githubusercontent.com/lncrawl/lightnovel-crawler/master/res/lncrawl-icon.png" width="112" alt="Lightnovel Crawler" />

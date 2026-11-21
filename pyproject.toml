@@ -37,6 +37,7 @@ dependencies = [
   "httpx[brotli,http2]>=0.27.0",
   "humanize>=4.0.0",
   "imap-tools>=1.10.0",
+  "jieba>=0.42.1",
   "lncrawl-scraper[all]~=1.7.0",
   "lncrawl-sourcelib[fetch]~=0.1.2",
   "lncrawl-translator>=0.2.1",

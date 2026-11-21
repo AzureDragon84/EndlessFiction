@@ -60,8 +60,13 @@ and persistence; the package owns engines, routing lanes, rate limits, retries, 
   target language (joined to `glossary_terms`) as a plain `source -> rendering` dict, send
   it with each request, and merge returned `new_terms` back. A chapter's *first* translation
   also runs the frequency pre-pass (`services/glossary_extract.py`): recurring source names
-  are stored as terms with `freq`, `first_chapter_serial`, `pinyin` and `category` before the
-  engine sees the text, and `services/glossary.py` archives every proposal (accepted or not)
+  are stored as terms with `freq`, `first_chapter_serial`, `reading` and `category` before the
+  engine sees the text. The surfaces and their reading come from the `LanguageProfile`
+  registered for the novel's language (`services/glossary_profile.py`: zh/en/ja/ko plus a
+  fallback that takes over with a logged warning when an optional dependency is missing),
+  and `Novel.extra["translation_style"]` (read through `ctx.terms.translation_style`)
+  carries the per-novel name order, honorific policy and category shortlist into the paid
+  prompts. `services/glossary.py` archives every proposal (accepted or not)
   in `glossary_candidates`. Editor writes go through `services/glossary.py` and are `locked`,
   so an engine merge never overwrites them;
   `NovelGlossary.revision` bumps once per batch that changed something. Chapter translation dedupes via a

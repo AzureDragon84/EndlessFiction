@@ -40,6 +40,19 @@ class FetchService:
         resp.raise_for_status()
         return resp.content
 
+    def get_response(
+        self,
+        url: str,
+        signal: Optional[Event] = None,
+        **kwargs: Any,
+    ) -> requests.Response:
+        """A GET whose status the caller inspects itself.
+
+        The free translation endpoint reports quota in the body and status, and
+        a 429 there is an ordinary answer to fall back from, not an exception.
+        """
+        return ctx.scraper.plain().get(url, signal=signal, **kwargs)
+
     def download(
         self,
         url: str,

@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Endless Fiction — Admin Dashboard</title>
+  <link rel="stylesheet" href="/ui/assets/base.css" />
+  <link rel="stylesheet" href="/ui/assets/reader.css" />
+  <link rel="stylesheet" href="/ui/assets/admin.css" />
+</head>
+<body>
+  <div id="login" hidden>
+    <form id="loginForm">
+      <h1>Endless Fiction</h1>
+      <p>Sign in with an administrator account to open the dashboard.</p>
+      <input id="loginEmail" placeholder="Email" autocomplete="username" required />
+      <input id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" required />
+      <button class="btn primary" type="submit">Sign in</button>
+      <div id="loginError" class="error"></div>
+    </form>
+  </div>
+
+  <div id="app" class="dash" hidden>
+    <aside class="rail">
+      <a class="brand" href="/">Endless Fiction<span>Admin</span></a>
+      <div class="rail-label">Translation</div>
+      <button class="nav-item active" data-panel="overview">Overview</button>
+      <button class="nav-item" data-panel="keys">Keys &amp; models</button>
+      <button class="nav-item" data-panel="extract">Glossary extraction</button>
+      <button class="nav-item" data-panel="glossary">Glossary translation</button>
+      <button class="nav-item" data-panel="chapters">Chapter translation</button>
+      <div class="rail-label">System</div>
+      <button class="nav-item" data-panel="settings">Settings</button>
+      <div class="foot">
+        <a class="btn ghost small" href="/">Library</a>
+        <a class="btn ghost small" href="/read">Reader</a>
+        <button class="btn ghost small" id="signOut">Sign out</button>
+      </div>
+    </aside>
+
+    <div class="dash-main">
+      <header class="dash-bar">
+        <h1 id="panelTitle">Overview</h1>
+        <div class="spacer"></div>
+        <select id="novelSelect" aria-label="Novel" style="max-width: 330px"></select>
+        <span class="pill" data-user-name></span>
+      </header>
+
+      <div class="dash-body">
+        <!-- ------------------------------------------------------ overview -->
+        <section class="panel active" id="panel-overview">
+          <div class="stats" id="overviewStats"></div>
+          <div class="split">
+            <div class="card">
+              <h2>Key pool</h2>
+              <p class="hint">Live quota from the notebook-style pool. Keys are written only from <em>Keys &amp; models</em>.</p>
+              <div id="overviewPool"></div>
+            </div>
+            <div class="card">
+              <h2>Recent translation jobs</h2>
+              <p class="hint">The last chapter and novel translation jobs for this server.</p>
+              <div class="table-wrap" id="overviewJobs"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- keys -->
+        <section class="panel" id="panel-keys">
+          <div class="split">
+            <div class="card">
+              <h2>Gemini keys</h2>
+              <p class="hint">
+                One key per line, exactly like the notebook: <code>AIza…</code>,
+                <code>LABEL=AIza…</code> or <code>AIza…,project</code>. Keys are write-only —
+                saving replaces the whole set.
+              </p>
+              <textarea id="keysInput" rows="6" placeholder="AIzaSy...&#10;MAIN=AIzaSy...&#10;AIzaSy...,project-b"></textarea>
+              <div class="row" style="margin-top: 10px">
+                <button class="btn primary" id="saveKeys">Save keys</button>
+                <button class="btn ghost" id="clearKeys" title="Temporary: wipe the pool so fresh keys can be pasted">Remove all keys</button>
+                <span class="muted" id="keysNote"></span>
+              </div>
+
+              <h2 style="margin-top: 24px">Models</h2>
+              <p class="hint">
+                Every Gemini model the pool can use. Only the models listed here join the pool,
+                and each one keeps its own Google limits — one model on one key is one quota
+                bucket. Editing RPM, TPM or RPD changes how much the pool believes it may spend.
+              </p>
+              <div class="model-list" id="modelRows"></div>
+              <div class="row" style="margin-top: 10px">
+                <select id="modelAdd" aria-label="Model to add"></select>
+                <button class="btn" id="addModel">Add model</button>
+                <button class="btn primary" id="saveModels">Save models</button>
+                <span class="muted" id="modelNote"></span>
+              </div>
+
+              <h2 style="margin-top: 24px">Task chains</h2>
+              <p class="hint">
+                Which models each task may use. The pool hands work to whichever listed model has
+                the most room this minute, so select every model a task may spend. Models marked
+                <em>not in pool</em> are ignored until they are added above.
+              </p>
+              <div class="form-grid">
+                <label class="field">Chapter translation<select id="chain-translate" multiple size="7"></select></label>
+                <label class="field">Glossary renderings<select id="chain-glossary" multiple size="7"></select></label>
+                <label class="field">Term categories<select id="chain-classify" multiple size="7"></select></label>
+                <label class="field">Glossary extraction<select id="chain-extract" multiple size="7"></select></label>
+              </div>
+              <div class="row" style="margin-top: 12px">
+                <button class="btn primary" id="saveChains">Save chains</button>
+                <span class="muted" id="chainNote"></span>
+              </div>
+            </div>
+
+            <div class="card">
+              <h2>Run settings</h2>
+              <div class="stack">
+                <label class="check"><input type="checkbox" id="setEnabled" /> Translation enabled</label>
+                <label class="check"><input type="checkbox" id="setAutoPause" /> Pause jobs when every key is spent</label>
+                <div class="form-grid">
+                  <label class="field">Reset timezone <input id="setResetTz" placeholder="America/Los_Angeles" /></label>
+                  <label class="field">Max request tokens <input id="setMaxTokens" type="number" min="1000" /></label>
+                </div>
+                <label class="field">Keyless engine order <input id="setEngines" placeholder="google, bing" /></label>
+              </div>
+              <div class="row" style="margin-top: 12px">
+                <button class="btn primary" id="saveSettings">Save run settings</button>
+                <span class="muted" id="settingsNote"></span>
+              </div>
+
+              <h2 style="margin-top: 24px">Pre-flight estimate</h2>
+              <div class="row">
+                <input id="estimateChapters" type="number" min="0" value="10" style="width: 110px" aria-label="Chapters" />
+                <input id="estimateChars" type="number" min="100" value="4000" style="width: 140px" aria-label="Characters per chapter" />
+                <button class="btn" id="estimateButton">Estimate</button>
+              </div>
+              <p class="muted" id="estimateNote"></p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="row">
+              <h2 style="margin: 0">Key health</h2>
+              <div class="spacer"></div>
+              <button class="btn primary" id="probeKeys">Check all keys</button>
+            </div>
+            <p class="hint">
+              Asks Google which models each key may call, so every key shows whether it is
+              valid, expired, invalid, blocked or billing-disabled, and which pool models it
+              cannot use. Rate limits and spent quotas come from real calls, so a check spends
+              no quota at all.
+            </p>
+            <div class="table-wrap" id="keyHealthTable"></div>
+            <p class="muted" id="probeNote"></p>
+          </div>
+
+          <div class="card">
+            <h2>Pool status</h2>
+            <div class="table-wrap" id="poolTable"></div>
+            <h3>Recent pool log</h3>
+            <div class="log" id="poolLog"></div>
+          </div>
+        </section>
+
+        <!-- ------------------------------------------------------- extract -->
+        <section class="panel" id="panel-extract">
+          <div class="card">
+            <h2>Glossary extraction</h2>
+            <p class="hint">
+              Scan crawled chapters for recurring names, sects, techniques and items. Frequency is
+              added to existing terms; decisions are never touched. The scan is free; Decide batch
+              settles the terms it found — verdict, category and English rendering — in one paid
+              call.
+            </p>
+            <div class="form-grid">
+              <label class="field">Start offset <input id="extractOffset" type="number" min="0" value="0" /></label>
+              <label class="field">Batch size <input id="extractLimit" type="number" min="1" max="200" value="40" /></label>
+              <label class="field">Minimum frequency <input id="extractMinFreq" type="number" min="1" max="10" value="2" /></label>
+              <label class="field">Extract mode
+                <select id="extractMode">
+                  <option value="local">Local scan (free)</option>
+                  <option value="llm">LLM extract (paid)</option>
+                </select>
+              </label>
+              <label class="field">Decide model <select id="model-extract"></select></label>
+            </div>
+            <div class="row" style="margin-top: 14px">
+              <button class="btn primary" id="runExtract">Scan batch</button>
+              <button class="btn" id="scanAll">Scan whole novel</button>
+              <button class="btn" id="runDecide">Decide batch</button>
+              <span class="muted" id="extractNote"></span>
+            </div>
+            <p class="muted" id="llmNote"></p>
+            <p class="muted" id="decideNote"></p>
+            <div class="bar" id="extractBar" hidden><span style="width: 0%"></span></div>
+          </div>
+
+          <div class="card">
+            <h2>Largest terms in this novel</h2>
+            <div class="table-wrap" id="extractResults"></div>
+          </div>
+        </section>
+
+        <!-- ------------------------------------------------------ glossary -->
+        <section class="panel" id="panel-glossary">
+          <div class="stack">
+            <div class="card">
+              <h2>Glossary</h2>
+              <p class="hint">
+                Decide batch in the Glossary extraction tab settles every open term in one paid
+                call: whether it is a term, its category and its English rendering. A decision
+                already recorded is never asked about again, and editor-locked entries are never
+                overwritten.
+              </p>
+              <dl class="kv" id="glossStats"></dl>
+              <div class="row" style="margin-top: 12px">
+                <button class="btn" id="clearGlossary">Clear glossary</button>
+              </div>
+              <p class="muted" id="glossNote"></p>
+            </div>
+
+            <div class="card">
+              <h2>Translation style</h2>
+              <p class="hint">
+                The novel's source language and how its names should read. The language picks the
+                extraction profile; name order and honorifics steer the paid prompts, and the
+                enabled categories limit what a model may choose. Leave every category selected
+                to allow all of them.
+              </p>
+              <div class="form-grid">
+                <label class="field">Source language <select id="styleLanguage"></select></label>
+                <label class="field">Name order <select id="styleNameOrder"></select></label>
+                <label class="field">Honorifics <select id="styleHonorifics"></select></label>
+              </div>
+              <!-- Its own row: six visible rows next to three one-line selects
+                   would leave the row as empty space as content. -->
+              <div class="form-grid" style="margin-top: 12px; max-width: 520px">
+                <label class="field">Enabled categories
+                  <select id="styleCategories" multiple size="6"></select>
+                </label>
+              </div>
+              <div class="row">
+                <button class="btn primary" id="saveStyle">Save style</button>
+                <span class="muted" id="styleNote"></span>
+              </div>
+            </div>
+
+            <div class="card">
+              <h2>Review</h2>
+              <div class="row">
+                <input id="termSearch" placeholder="Search source term" style="flex: 1; min-width: 140px" />
+                <select id="termCategory" style="width: 160px" aria-label="Category">
+                  <option value="">All categories</option>
+                </select>
+                <select id="termSource" style="width: 170px" aria-label="Found by">
+                  <option value="">Any source</option>
+                </select>
+                <select id="termLimit" style="width: 130px" aria-label="Rows per page">
+                  <option value="25">25 rows</option>
+                  <option value="50" selected>50 rows</option>
+                  <option value="100">100 rows</option>
+                  <option value="200">200 rows</option>
+                  <option value="0">All rows</option>
+                </select>
+                <label class="check"><input type="checkbox" id="termHidden" /> Show hidden</label>
+                <button class="btn" id="reloadTerms">Reload</button>
+              </div>
+              <div class="table-wrap" id="termTable" style="margin-top: 12px"></div>
+              <div class="pager">
+                <button class="btn small" id="termPrev">←</button>
+                <span id="termPage"></span>
+                <button class="btn small" id="termNext">→</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ------------------------------------------------------ chapters -->
+        <section class="panel" id="panel-chapters">
+          <div class="card">
+            <h2>Chapter translation</h2>
+            <p class="hint">
+              Pick a pass, select chapters, then queue them. Only chapters with crawled source text
+              can be translated. Web and Web+ are keyless; AI spends the key pool.
+            </p>
+            <div class="row">
+              <div class="modes compact" id="chapterModes" role="group" aria-label="Translation pass">
+                <button class="mode" data-mode="web">Web</button>
+                <button class="mode" data-mode="web_plus">Web+</button>
+                <button class="mode active" data-mode="ai">AI</button>
+              </div>
+              <div class="spacer"></div>
+              <button class="btn" id="pageSelect">Select page</button>
+              <button class="btn primary" id="translateSelected">Translate selected</button>
+            </div>
+            <p class="muted" id="chapterNote"></p>
+            <div class="table-wrap" id="chapterTable"></div>
+            <div class="pager">
+              <button class="btn small" id="chapterPrev">←</button>
+              <span id="chapterPage"></span>
+              <button class="btn small" id="chapterNext">→</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Translation jobs</h2>
+            <p class="hint">Batches and their chapters, newest first. A job pauses when the pool is spent and resumes after the daily reset.</p>
+            <div class="table-wrap" id="jobTable"></div>
+          </div>
+        </section>
+
+        <!-- ------------------------------------------------------ settings -->
+        <section class="panel" id="panel-settings">
+          <div class="card">
+            <h2>Application settings</h2>
+            <p class="hint">
+              Every config property this server exposes. Sensitive values (keys, passwords) are
+              masked here and written from the section that owns them.
+            </p>
+            <div id="configSections" class="stack"></div>
+          </div>
+
+          <div class="card">
+            <h2>Maintenance</h2>
+            <div class="row">
+              <button class="btn" id="updateSources">Update sources</button>
+              <button class="btn" id="softRestart">Restart services</button>
+            </div>
+            <p class="muted" id="maintenanceNote"></p>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/assets/api.js"></script>
+  <script src="/ui/assets/admin.js"></script>
+</body>
+</html>

@@ -170,6 +170,24 @@ class __AppContext__:
         return TranslationService()
 
     @cached_property
+    def key_pool(self):
+        from .services.key_pool import KeyPoolService
+
+        return KeyPoolService()
+
+    @cached_property
+    def mt(self):
+        from .services.mt import MachineTranslateService
+
+        return MachineTranslateService()
+
+    @cached_property
+    def terms(self):
+        from .services.terms import TermService
+
+        return TermService()
+
+    @cached_property
     def crawler(self):
         from .services.crawler import CrawlerService
 

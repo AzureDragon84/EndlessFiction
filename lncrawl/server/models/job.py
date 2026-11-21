@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field, HttpUrl
 
-from ...dao import LanguageCode, OutputFormat
+from ...dao import LanguageCode, OutputFormat, TranslationMode
 
 
 class FetchNovelsRequest(BaseModel):
@@ -47,6 +47,10 @@ class TranslateVolumesRequest(BaseModel):
 class TranslateChaptersRequest(BaseModel):
     chapters: List[str] = Field(description="List of chapter ids to translate")
     language: LanguageCode = Field(description="Target language code")
+    mode: TranslationMode = Field(
+        default=TranslationMode.ai,
+        description="Which pass to run: web, web_plus or ai",
+    )
 
 
 class FetchMissingChaptersRequest(BaseModel):

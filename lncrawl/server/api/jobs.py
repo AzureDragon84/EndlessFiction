@@ -252,8 +252,8 @@ def translate_chapters(
     if len(chapters) > 1 and not ctx.tier.batch_translation_enabled(user):
         raise ServerErrors.tier_not_allowed
     if len(chapters) == 1:
-        return ctx.jobs.translate_chapter(user, chapters[0], body.language)
-    return ctx.jobs.translate_many_chapters(user, *chapters, language=body.language)
+        return ctx.jobs.translate_chapter(user, chapters[0], body.language, mode=body.mode)
+    return ctx.jobs.translate_many_chapters(user, *chapters, language=body.language, mode=body.mode)
 
 
 @router.post("/create/search-sources", summary="Create a job to search novels in available sources")

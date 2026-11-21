@@ -362,8 +362,135 @@ class AppConfig(_Section):
 # ------------------------------------------------------------------ #
 #                         Translator Section                         #
 # ------------------------------------------------------------------ #
+# The model the notebook pool used; a sensible first entry, not a requirement.
+_DEFAULT_POOL_MODEL = "gemini-3.1-flash-lite"
+_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+
+
 class TranslatorConfig(_Section):
     section = "translator"
+
+    @cached_property
+    def pool_state_file(self) -> str:
+        """Where the key pool keeps its per-key daily counters.
+
+        Persisted next to the config file so a restart does not reset the day's
+        usage, exactly like the notebook's `pool_state.json` on Drive.
+        """
+        return str(APP_DIR / "pool_state.json")
+
+    @cached_property
+    def gemini_base_url(self) -> str:
+        """Google's OpenAI-compatible endpoint used by pool models."""
+        return _GEMINI_BASE_URL
+
+    @property
+    def api_keys(self) -> Annotated[str, Sensitive]:
+        """Gemini API Keys.
+
+        Paste keys one per line, as in the notebook: a bare `AIza...` line is
+        labelled `GEMINI_KEY_1`, `GEMINI_KEY_2`, ...; `LABEL=AIza...` names one
+        yourself; `AIza...,projectA` gives it a project label. Keys from separate
+        Google Cloud projects each add quota — keys sharing a project share it,
+        so give those the same label after a comma.
+        """
+        return self._get("api_keys", "")
+
+    @api_keys.setter
+    def api_keys(self, v: str) -> None:
+        self._set("api_keys", v)
+
+    @property
+    def pool_models(self) -> List[dict]:
+        """Key Pool Models.
+
+        JSON list of model blocks, each `{"model": "gemini-3.1-flash-lite",
+        "keys": ["GEMINI_KEY_1", ...], "rpm": 15, "tpm": 250000, "rpd": 500}`.
+        Leave empty to use every saved key with one `gemini-3.1-flash-lite` block and
+        the free-tier limits. A unit is one model on one key: its rpm, tpm and rpd are
+        the per-key limits of the Google project that key belongs to.
+        """
+        return self._get("pool_models", [])
+
+    @pool_models.setter
+    def pool_models(self, v: List[dict]) -> None:
+        self._set("pool_models", v or [])
+
+    @property
+    def pool_tasks(self) -> dict:
+        """Key Pool Task Chains.
+
+        JSON map of task to the models it may use, in order: `{"translate":
+        ["gemini-3.1-flash-lite"], "extract": ["gemini-3.1-flash-lite"]}`. Tasks are
+        `translate` (chapter/novel translation) and `extract` (the paid glossary
+        extraction and decision pass). A model missing here is never used for that
+        task; a run pinned to one model overrides the chain for that run only.
+        """
+        # The dict default is load-bearing: the loader treats a dict-valued setting as
+        # a nested section and drops keys its default does not already have, so a bare
+        # `{}` would silently forget every saved chain on the next restart.
+        return self._get(
+            "pool_tasks",
+            lambda: {"translate": [], "extract": []},
+        )
+
+    @pool_tasks.setter
+    def pool_tasks(self, v: dict) -> None:
+        self._set("pool_tasks", v or {})
+
+    @property
+    def auto_pause_on_daily(self) -> bool:
+        """Pause When the Pool Is Spent.
+
+        When every key has used its daily requests, pause the translation job and
+        resume it after the quota resets instead of failing it. On by default, like
+        the notebook pool.
+        """
+        return self._get("auto_pause_on_daily", True)
+
+    @auto_pause_on_daily.setter
+    def auto_pause_on_daily(self, v: bool) -> None:
+        self._set("auto_pause_on_daily", bool(v))
+
+    @property
+    def reset_tz(self) -> str:
+        """Quota Reset Timezone.
+
+        Timezone whose midnight resets the daily request counters. Default is
+        `America/Los_Angeles`, which is when the free Gemini quotas reset.
+        """
+        return self._get("reset_tz", "America/Los_Angeles")
+
+    @reset_tz.setter
+    def reset_tz(self, v: str) -> None:
+        self._set("reset_tz", v or "America/Los_Angeles")
+
+    @property
+    def max_request_tokens(self) -> int:
+        """Maximum Input Tokens per Request.
+
+        Upper bound on the source tokens sent in one model call; the pool's tpm
+        limit can lower it further. Default is `150000`.
+        """
+        return int(self._get("max_request_tokens", 150_000))
+
+    @max_request_tokens.setter
+    def max_request_tokens(self, v: int) -> None:
+        self._set("max_request_tokens", max(1, int(v)))
+
+    @property
+    def web_engine_order(self) -> List[str]:
+        """Free Translation Engines.
+
+        Order in which the keyless Web and Web+ lanes are tried. `google` is the free
+        `translate.googleapis.com` endpoint, `bing` the Edge translator the
+        translator package already ships. Default is Google first, Bing second.
+        """
+        return self._get("web_engine_order", ["google", "bing"])
+
+    @web_engine_order.setter
+    def web_engine_order(self, v: List[str]) -> None:
+        self._set("web_engine_order", [str(name) for name in (v or ["google", "bing"])])
 
     @cached_property
     def config_file(self) -> str:

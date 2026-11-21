@@ -45,6 +45,12 @@ if TYPE_CHECKING:
         SourceDiagnosis,
         SourceItem,
     )
+    from .translation import (
+        GlossaryTranslateRequest,
+        OverrideRequest,
+        PoolUpdateRequest,
+        TermUpdateRequest,
+    )
     from .user import (
         CreateRequest,
         ForgotPasswordRequest,
@@ -79,6 +85,11 @@ __all__ = [
     "SourceItem",
     "PRCreateRequest",
     "PRResponse",
+    # translation
+    "PoolUpdateRequest",
+    "TermUpdateRequest",
+    "OverrideRequest",
+    "GlossaryTranslateRequest",
     # crawler
     "LoginData",
     "ProxyItem",
@@ -163,6 +174,10 @@ _LAZY: dict[str, str] = {
     "CrawlerTestRequest": ".sources",
     "PRCreateRequest": ".sources",
     "PRResponse": ".sources",
+    "PoolUpdateRequest": ".translation",
+    "TermUpdateRequest": ".translation",
+    "OverrideRequest": ".translation",
+    "GlossaryTranslateRequest": ".translation",
     "SourceDiagnosis": ".sources",
     "SourceItem": ".sources",
     "CreateRequest": ".user",

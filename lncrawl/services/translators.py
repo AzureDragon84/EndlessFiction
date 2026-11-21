@@ -12,7 +12,7 @@ from functools import cached_property
 from hashlib import sha256
 import logging
 from threading import Event
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, NoReturn, Optional, TypeVar
 
 import sqlmodel as sq
 
@@ -27,7 +27,7 @@ from ..dao import (
     Volume,
     VolumeTranslation,
 )
-from ..enums import LanguageCode
+from ..enums import LanguageCode, TranslationMode
 from ..exceptions import AbortedException, ServerErrors
 from .glossary import (
     apply_engine_proposal,
@@ -58,6 +58,19 @@ def _code(lang: Any) -> str:
     return lang.value if isinstance(lang, LanguageCode) else str(lang)
 
 
+def _estimate_tokens(texts: List[str]) -> int:
+    """Rough token cost of a request, used only for pool accounting."""
+    return max(1, sum(len(text or "") for text in texts) // 4)
+
+
+def _estimate_output(result: Any) -> int:
+    """Rough token length of an engine answer."""
+    text = getattr(result, "html", None) or ""
+    if not text:
+        text = "".join(getattr(result, "translations", None) or [])
+    return max(1, len(text) // 4)
+
+
 def _source_code(novel: Novel) -> Optional[str]:
     """A known source language for `novel`, or None to let the service auto-detect."""
     lang = getattr(novel, "language", None)
@@ -69,19 +82,169 @@ def _source_code(novel: Novel) -> Optional[str]:
         return None
 
 
+def _raise_call_error(error: BaseException) -> NoReturn:
+    """Map one engine error onto the status it actually deserves.
+
+    A busy provider is a 503 and a rejected request is a 422, but a crash in
+    the translation code itself is a 500 with a traceback. Everything used to
+    be a 503, so the package's `look-behind requires fixed-width pattern`
+    reached the dashboard as a quota problem and sent everyone to the key
+    pool. A fault that is retried on every key also spends the whole pool on
+    the same failure, which is why the unexpected cases raise immediately.
+    """
+    from translator import ApiError, InvalidRequestError
+
+    if isinstance(error, InvalidRequestError):
+        message = str(getattr(error, "message", "") or error)
+        logger.error(f"translation request rejected: {message}", exc_info=error)
+        raise ServerErrors.invalid_input.with_extra(message) from error
+
+    if isinstance(error, ApiError):
+        status_code = int(getattr(error, "status_code", 0) or 0)
+        message = str(getattr(error, "message", "") or error)
+        if status_code in (429, 503):
+            retry = getattr(error, "retry_after_seconds", None)
+            extra = f"retry after {retry}s" if retry else (message or "all engines busy")
+            raise ServerErrors.translation_quota_exhausted.with_extra(extra) from error
+        if status_code == 502:
+            raise ServerErrors.translation_service_unavailable.with_extra(message) from error
+        if 400 <= status_code < 500:
+            raise ServerErrors.invalid_input.with_extra(
+                f"{status_code}: {message}".strip(": ")
+            ) from error
+        logger.error(f"translation failed ({status_code}): {message}", exc_info=error)
+        raise ServerErrors.translation_internal_error.with_extra(
+            f"{status_code}: {message}".strip(": ")
+        ) from error
+
+    logger.error("translation crashed", exc_info=error)
+    raise ServerErrors.translation_internal_error.with_extra(
+        f"{type(error).__name__}: {error}"
+    ) from error
+
+
 class TranslationService:
     @cached_property
     def engine(self) -> "TranslatorService":
         """The embedded translator: engines, routing, and rate limits run
-        in-process on the package's own event-loop thread. Its config file
-        lives in the app data dir and is edited via the mounted dashboard."""
+        in-process on the package's own event-loop thread.
+
+        The config file is projected from the key pool first, so one provider
+        exists per API key and the package rate-limits each key on its own. The
+        file is only rewritten when the pool actually changed.
+        """
         from translator import TranslatorService
 
+        ctx.key_pool.ensure_config()
         return TranslatorService(config_path=ctx.config.translator.config_file)
+
+    def reload(self) -> None:
+        """Rebuild the embedded translator after a pool/config change."""
+        if "engine" in self.__dict__:
+            try:
+                self.engine.close()
+            except Exception:
+                logger.warning("Failed to close the translator service", exc_info=True)
+            del self.__dict__["engine"]
 
     def close(self) -> None:
         if "engine" in self.__dict__:
             self.engine.close()
+
+    def selftest(self) -> Dict[str, Any]:
+        """Exercise the chapter-translation plumbing without spending a key.
+
+        Every check here is a class of failure that used to surface as "503
+        quota exhausted" while no key had been touched: a pattern that cannot
+        compile, a chunker that loses markup, a glossary round-trip that does
+        not restore its terms, or a pool that projects no engine.
+        """
+        checks: List[Dict[str, Any]] = []
+
+        def check(name: str, call: Callable[[], str]) -> None:
+            try:
+                checks.append({"check": name, "ok": True, "detail": call()})
+            except Exception as error:
+                logger.error(f"selftest failed: {name}", exc_info=True)
+                checks.append(
+                    {
+                        "check": name,
+                        "ok": False,
+                        "detail": f"{type(error).__name__}: {error}",
+                    }
+                )
+
+        def sentence_split() -> str:
+            from .mt import _SENTENCE_SPLIT
+
+            pieces = [
+                piece
+                for piece in _SENTENCE_SPLIT.split("这是一句话。这也是！真的吗？" * 50)
+                if piece
+            ]
+            return f"{len(pieces)} sentence piece(s)"
+
+        def chunking() -> str:
+            from translator.text.html import chunk_html, estimate_tokens
+
+            # The configured budget never splits anything, so force a small one.
+            # The chunker refuses to split one oversized element mid-markup, so
+            # the fixture is many small paragraphs rather than one long <p>. A
+            # bypassed chunker returns the 1000+ token sample whole, which the
+            # size check below already fails on. Sizes use the chunker's own
+            # estimator because that is the budget it promises to keep.
+            budget = 200
+            html = "".join(
+                f"<p>第{index}段：这是一段用于测试分块的文本。</p>" for index in range(1, 61)
+            )
+            chunks = chunk_html(html, budget)
+            if "".join(chunks) != html:
+                raise AssertionError("chunks do not reassemble to the original html")
+            if any(estimate_tokens(chunk) > budget for chunk in chunks):
+                raise AssertionError(f"a chunk exceeds the forced {budget}-token budget")
+            return (
+                f"{len(chunks)} chunk(s) at a forced {budget} tokens"
+                f" from {estimate_tokens(html)} source tokens, reassembled exactly"
+            )
+
+        def glossary_roundtrip() -> str:
+            from translator.text.glossary import protect, reinject
+
+            html = "<p>赵辰登上了星舰。</p>"
+            protected, mapping = protect(html, {"赵辰": "Zhao Chen", "星舰": "starship"})
+            if not mapping or protected == html:
+                raise AssertionError("glossary protection replaced nothing")
+            restored = reinject(protected, mapping)
+            for expected in ("Zhao Chen", "starship"):
+                if expected not in restored:
+                    raise AssertionError(f"{expected!r} missing after reinject")
+            if "\ue000" in restored:
+                raise AssertionError("a placeholder survived reinject")
+            return f"{len(mapping)} term(s) protected and restored"
+
+        def extraction() -> str:
+            sample = "赵辰说道。赵辰笑了。赵辰走了。John Smith met John Smith."
+            found = extract_terms([(1, sample)], language="zh", limit=50)
+            return f"{len(found)} local candidate(s)"
+
+        def pool() -> str:
+            units = ctx.key_pool.units()
+            if not units:
+                raise AssertionError("no Gemini key saved")
+            engine = self.engine
+            return f"{len(units)} unit(s); {type(engine).__name__} built from the pool"
+
+        check("sentence split", sentence_split)
+        check("html chunking", chunking)
+        check("glossary round-trip", glossary_roundtrip)
+        check("local extraction", extraction)
+        check("engine config", pool)
+        return {
+            "ok": all(item["ok"] for item in checks),
+            "checks": checks,
+            "budget": int(ctx.config.translator.max_request_tokens),
+            "models": ctx.key_pool.chain("translate"),
+        }
 
     # ---------------------------------------------------------------------------------------------
     # Engine plumbing
@@ -96,22 +259,109 @@ class TranslationService:
 
     def _invoke(self, call: Callable[[], T]) -> T:
         """Run an engine call, mapping the package's error taxonomy to ServerErrors."""
-        from translator import AbortedError, ApiError, InvalidRequestError
+        from translator import AbortedError
 
         try:
             return call()
         except AbortedError as e:
             raise AbortedException(str(e)) from e
-        except ApiError as e:
-            if e.status_code == 503:
-                retry = e.retry_after_seconds
-                extra = f"retry after {retry}s" if retry else (e.message or "all engines busy")
-                raise ServerErrors.translation_quota_exhausted.with_extra(extra) from e
+        except Exception as e:
+            _raise_call_error(e)
+
+    def _attempt(self, call: Callable[[], T]):
+        """Run one engine call and return `(result, error)` instead of raising.
+
+        The pool needs the error to decide whether to rest this key, try the
+        next one, or stop; mapping it to an HTTP error happens only after the
+        last candidate is spent.
+        """
+        from translator import AbortedError, ApiError, InvalidRequestError
+
+        try:
+            return call(), None
+        except AbortedError as e:
+            raise AbortedException(str(e)) from e
+        except (ApiError, InvalidRequestError) as e:
+            return None, e
+        except Exception as e:
+            # Anything else is a fault in the translation code, not an engine
+            # answer. Hand it back so it is reported once as a 500.
+            return None, e
+
+    def _dispatch(
+        self,
+        build: Callable[[Optional[str]], T],
+        *,
+        estimated_tokens: int,
+        signal: Optional[Event] = None,
+    ) -> T:
+        """Run a translation through the key pool, one unit at a time.
+
+        The pool picks the unit (model on one key) with headroom and this pins
+        `engine=` to it, so the package never silently moves the call to
+        another model. A quota answer rests that key and tries the next; when
+        no unit can serve the call the job is paused to the reset instead of
+        failing, which is what the notebook's `auto_pause_on_daily` does.
+        """
+        from translator import InvalidRequestError
+
+        from .key_pool import PoolExhausted
+
+        units = ctx.key_pool.units()
+        if not units:
             raise ServerErrors.translation_failure.with_extra(
-                f"{e.status_code}: {e.message}".strip()
-            ) from e
-        except InvalidRequestError as e:
-            raise ServerErrors.translation_failure.with_extra(e.message) from e
+                "No Gemini key saved. Add keys in the key pool settings."
+            )
+
+        tried: List[str] = []
+        last_error = None
+        while len(tried) < len(units):
+            lease = ctx.key_pool.lease(
+                "translate",
+                estimated_tokens=estimated_tokens,
+                exclude=tried,
+                units=units,
+            )
+            if lease is None:
+                break
+            unit = lease.unit
+            tried.append(unit.id)
+            result, error = self._attempt(lambda: build(unit.engine_id))
+            if result is not None:
+                ctx.key_pool.report(
+                    lease,
+                    tokens_in=estimated_tokens,
+                    tokens_out=_estimate_output(result),
+                )
+                return result
+
+            last_error = error
+            if error is None:
+                continue
+            if isinstance(error, InvalidRequestError):
+                # A rejected request is our bug; trying it on the next key only
+                # spends the whole pool on the same failure.
+                _raise_call_error(error)
+            status = int(getattr(error, "status_code", 0) or 0)
+            if status in (429, 503):
+                kind = "rate" if status == 429 else "quota"
+            elif status in (500, 502, 504, 529):
+                kind = "failed"
+            else:
+                # Not an engine answer at all: surface it as an internal error
+                # instead of a spent key.
+                _raise_call_error(error)
+            detail = getattr(error, "message", "") or str(error)
+            ctx.key_pool.report(lease, error=kind, detail=str(detail)[:200])
+
+        if ctx.config.translator.auto_pause_on_daily and ctx.key_pool.all_exhausted():
+            raise PoolExhausted(ctx.key_pool.resume_seconds())
+        retry = ctx.key_pool.resume_seconds()
+        raise ServerErrors.translation_quota_exhausted.with_extra(
+            f"all keys are spent; next reset in {retry}s"
+            if last_error is None
+            else f"{last_error}; next reset in {retry}s"
+        )
 
     # ---------------------------------------------------------------------------------------------
     # Endpoint wrappers
@@ -126,6 +376,7 @@ class TranslationService:
         glossary: Optional[Dict[str, str]] = None,
         context: Optional[str] = None,
         signal: Optional[Event] = None,
+        engine: Optional[str] = None,
     ) -> "TranslateTextResponse":
         payload: Dict[str, Any] = {
             "texts": texts,
@@ -136,6 +387,18 @@ class TranslationService:
             payload["source_lang"] = source
         if context:
             payload["context"] = context
+        if engine:
+            payload["engine"] = engine
+        else:
+            return self._dispatch(
+                lambda pinned: self.engine.translate_text(
+                    {**payload, "engine": pinned},
+                    signal=signal,
+                    timeout=ctx.config.translator.request_timeout,
+                ),
+                estimated_tokens=_estimate_tokens(texts),
+                signal=signal,
+            )
         return self._invoke(
             lambda: self.engine.translate_text(
                 payload,
@@ -154,6 +417,7 @@ class TranslationService:
         context: Optional[Dict[str, str]] = None,
         extract_terms: bool = True,
         signal: Optional[Event] = None,
+        engine: Optional[str] = None,
     ) -> "TranslateHtmlResponse":
         payload: Dict[str, Any] = {
             "html": html,
@@ -165,6 +429,18 @@ class TranslationService:
             payload["source_lang"] = source
         if context:
             payload["context"] = context
+        if engine:
+            payload["engine"] = engine
+        else:
+            return self._dispatch(
+                lambda pinned: self.engine.translate_html(
+                    {**payload, "engine": pinned},
+                    signal=signal,
+                    timeout=ctx.config.translator.request_timeout,
+                ),
+                estimated_tokens=_estimate_tokens([html]),
+                signal=signal,
+            )
         return self._invoke(
             lambda: self.engine.translate_html(
                 payload,
@@ -172,6 +448,26 @@ class TranslationService:
                 timeout=ctx.config.translator.request_timeout,
             )
         )
+
+    def machine_html(
+        self,
+        html: str,
+        target: Any,
+        *,
+        source: Optional[str] = None,
+        glossary: Optional[Dict[str, str]] = None,
+        signal: Optional[Event] = None,
+    ) -> str:
+        """Pinned keyless Bing pass, used as the Web lane's fallback."""
+        result = self._translate_html(
+            html,
+            target,
+            source=source,
+            glossary=glossary,
+            signal=signal,
+            engine="bing",
+        )
+        return result.html
 
     # ---------------------------------------------------------------------------------------------
     # Glossary storage
@@ -232,14 +528,16 @@ class TranslationService:
         scanner cannot read it.
         """
         try:
-            terms = extract_terms([(chapter.serial, content)], language=novel.language)
+            terms = extract_terms(
+                [(chapter.serial, content)], language=ctx.terms.novel_language(novel)
+            )
         except Exception as error:
             logger.warning(f"glossary pre-pass skipped for chapter {chapter.serial}: {error}")
             return
         if not terms:
             return
         with term_lock(chapter.novel_id), ctx.db.session() as sess:
-            record_extracted_terms(sess, chapter.novel_id, terms)
+            record_extracted_terms(sess, chapter.novel_id, terms, chapter_ids=[chapter.id])
             sess.commit()
 
     def _previous_chapter_tail(self, chapter: Chapter, target: Any) -> Optional[str]:
@@ -359,7 +657,13 @@ class TranslationService:
         chapter: Chapter,
         target: LanguageCode,
         signal: Optional[Event] = None,
+        mode: TranslationMode = TranslationMode.ai,
     ) -> None:
+        mode = TranslationMode(mode)
+        if mode in (TranslationMode.web, TranslationMode.web_plus):
+            self._translate_chapter_web(chapter, target, signal, mode)
+            return
+
         translation = ctx.chapters.get_chapter_translation(chapter, target)
 
         content = ctx.files.load_text(chapter.content_file)
@@ -390,7 +694,7 @@ class TranslationService:
             context=context,
             signal=signal,
         )
-        translated = body.html
+        translated = ctx.terms.mark(body.html, chapter.novel_id, _code(target))
         terms = body.new_terms
         engine = body.engine
         if body.warnings:
@@ -435,3 +739,47 @@ class TranslationService:
 
         ctx.files.save_text(translation.content_file, translated)
         self._merge_glossary(chapter.novel_id, target, {**terms, **title_terms}, engine=engine)
+
+    def _translate_chapter_web(
+        self,
+        chapter: Chapter,
+        target: LanguageCode,
+        signal: Optional[Event],
+        mode: TranslationMode,
+    ) -> None:
+        """Keyless Web/Web+ pass, cached as a file and independent of the pool.
+
+        Web+ enforces the glossary through placeholders and then marks the
+        rendered terms, so a later glossary edit re-renders this file instead of
+        translating it again.
+        """
+        language = _code(target)
+        path = ChapterTranslation.mode_path(chapter.novel_id, chapter.serial, language, mode)
+        try:
+            if ctx.files.exists(path) and ctx.files.load_text(path).strip():
+                return
+        except Exception:
+            pass
+
+        content = ctx.files.load_text(chapter.content_file)
+        novel = ctx.novels.get(chapter.novel_id)
+        glossary = (
+            self._load_glossary(chapter.novel_id, target)
+            if mode == TranslationMode.web_plus
+            else {}
+        )
+        try:
+            translated, engine = ctx.mt.translate(
+                content,
+                language,
+                source=_source_code(novel),
+                glossary=glossary,
+                signal=signal,
+            )
+        except Exception as error:
+            raise ServerErrors.translation_failure.with_extra(str(error)) from error
+
+        if mode == TranslationMode.web_plus:
+            translated = ctx.terms.mark(translated, chapter.novel_id, language)
+        ctx.files.save_text(path, translated)
+        logger.info(f"Web translation ({mode.value}) chapter {chapter.serial} via {engine}")

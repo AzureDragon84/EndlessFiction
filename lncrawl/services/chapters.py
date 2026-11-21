@@ -6,7 +6,7 @@ import sqlmodel as sq
 
 from ..context import ctx
 from ..core import Chapter as CrawlerChapter, PageSoup
-from ..dao import Chapter, Job, LanguageCode, User, Volume
+from ..dao import Chapter, Job, LanguageCode, TranslationMode, User, Volume
 from ..dao.chapter import ChapterTranslation
 from ..exceptions import ServerErrors
 from ..server.models import Paginated, ReadChapterResponse
@@ -273,11 +273,13 @@ class ChapterService:
         *,
         auto_fetch: Optional[bool] = None,
         language: Optional[LanguageCode] = None,
+        mode: TranslationMode = TranslationMode.ai,
     ) -> ReadChapterResponse:
         if auto_fetch is None:
             auto_fetch = ctx.tier.auto_fetch_enabled(user)
 
         chapter = self.get(chapter_id)
+        mode = TranslationMode(mode) if language else TranslationMode.raw
 
         job: Optional[Job] = None
         content: Optional[str] = None
@@ -289,32 +291,63 @@ class ChapterService:
                 job = ctx.jobs.fetch_chapter(user, chapter_id)
 
         translation_engine: Optional[str] = None
-        if language:
+        if language and mode != TranslationMode.raw:
             content = None
-            chapter_translation = self.get_chapter_translation(chapter, language)
-            if chapter_translation and chapter_translation.is_available:
-                chapter.title = chapter_translation.chapter_title or chapter.title
-                content = ctx.files.load_text(chapter_translation.content_file)
-                translation_engine = chapter_translation.extra.get("engine")
-            elif not ctx.config.translator.enabled:
-                raise ServerErrors.translation_disabled
-            elif not ctx.tier.translation_enabled(user):
-                raise ServerErrors.tier_not_allowed
-            elif auto_fetch:
-                fetch_job_id = job.id if job else None
-                translate_job = ctx.jobs.get_chapter_translation_job(user.id, chapter_id, language)
-                if not translate_job:
-                    translate_job = ctx.jobs.translate_chapter(
-                        user, chapter_id, language, depends_on=fetch_job_id
+            if mode in (TranslationMode.web, TranslationMode.web_plus):
+                path = ChapterTranslation.mode_path(
+                    chapter.novel_id, chapter.serial, language.value, mode
+                )
+                content = self._load_stored(path)
+                if content:
+                    translation_engine = mode.value
+                elif not ctx.config.translator.enabled:
+                    raise ServerErrors.translation_disabled
+                elif not ctx.tier.can_start_translation(user):
+                    # Readers get what exists; only an admin may spend quota.
+                    raise ServerErrors.translation_not_available
+                elif auto_fetch:
+                    job = ctx.jobs.translate_chapter(user, chapter_id, language, mode=mode)
+            else:
+                chapter_translation = self.get_chapter_translation(chapter, language)
+                if chapter_translation and chapter_translation.is_available:
+                    chapter.title = chapter_translation.chapter_title or chapter.title
+                    content = ctx.files.load_text(chapter_translation.content_file)
+                    translation_engine = chapter_translation.extra.get("engine")
+                elif not ctx.config.translator.enabled:
+                    raise ServerErrors.translation_disabled
+                elif not ctx.tier.can_start_translation(user):
+                    raise ServerErrors.translation_not_available
+                elif auto_fetch:
+                    fetch_job_id = job.id if job else None
+                    translate_job = ctx.jobs.get_chapter_translation_job(
+                        user.id, chapter_id, language
                     )
-                if not job or job.is_done:
-                    job = translate_job
+                    if not translate_job:
+                        translate_job = ctx.jobs.translate_chapter(
+                            user, chapter_id, language, depends_on=fetch_job_id
+                        )
+                    if not job or job.is_done:
+                        job = translate_job
+
+            if content and mode in (TranslationMode.web_plus, TranslationMode.ai):
+                # Glossary edits re-render a stored chapter; they never retranslate it.
+                content = ctx.terms.render(content, chapter.novel_id, language.value, user.id)
 
         word_count: Optional[int] = None
         if content:
             word_count = PageSoup.create(content).word_count()
 
-        novel = ctx.novels.get(chapter.novel_id, language)
+        # Web/Web+ do not need a translated novel row: they are a rendering of
+        # the source title and body, not a stored language edition. AI uses it
+        # when it exists, but a chapter with no AI translation yet must still
+        # open — a missing novel edition is not a missing chapter.
+        novel = ctx.novels.get(chapter.novel_id)
+        if (
+            language
+            and mode == TranslationMode.ai
+            and ctx.novels.get_novel_translation(novel, language)
+        ):
+            novel = ctx.novels.get(chapter.novel_id, language)
         with ctx.db.session() as sess:
             previous_id = sess.exec(
                 sq.select(Chapter.id)
@@ -335,11 +368,22 @@ class ChapterService:
             chapter=chapter,
             content=content,
             language=language,
+            mode=mode.value,
             word_count=word_count,
             translation_engine=translation_engine,
             next_id=next_id,
             previous_id=previous_id,
         )
+
+    @staticmethod
+    def _load_stored(path: str) -> Optional[str]:
+        try:
+            if ctx.files.exists(path):
+                text = ctx.files.load_text(path)
+                return text if text and text.strip() else None
+        except Exception:
+            return None
+        return None
 
     def sync(self, novel_id: str, chapters: List[CrawlerChapter]):
         with ctx.db.session() as sess:

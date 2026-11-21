@@ -68,6 +68,14 @@ class _E(Generic[E]):
 
 
 def _se(*args: Any):
+    """Declare an error singleton as `_se(status, detail)` or `_se(Class, status, detail)`.
+
+    The factory form was never honoured: `_se(ServerError, 503, "...")` became
+    `ServerError(ServerError, 503, "...")`, so that error rendered as
+    `Error(<class ServerError>): 503` instead of its status and message.
+    """
+    if args and isinstance(args[0], type) and issubclass(args[0], BaseException):
+        return _E(*args)
     return _E(ServerError, *args)
 
 
@@ -140,6 +148,14 @@ class ServerErrors:
     translation_disabled = _se(
         status.HTTP_403_FORBIDDEN,
         "Translation is currently disabled",
+    )
+    translation_not_available = _se(
+        status.HTTP_404_NOT_FOUND,
+        "Translation is not available yet",
+    )
+    no_such_term = _se(
+        status.HTTP_404_NOT_FOUND,
+        "No such glossary term",
     )
     job_limit_reached = _se(
         status.HTTP_429_TOO_MANY_REQUESTS,
@@ -273,14 +289,22 @@ class ServerErrors:
         status.HTTP_503_SERVICE_UNAVAILABLE,
         "Translation Failure",
     )
+    translation_internal_error = _se(
+        status.HTTP_500_INTERNAL_SERVER_ERROR,
+        "Translation failed due to an internal error",
+    )
     translation_service_unavailable = _se(
         status.HTTP_503_SERVICE_UNAVAILABLE,
-        "Translator service is not reachable",
+        "Every translation engine failed",
     )
     translation_quota_exhausted = _se(
         ServerError,
         status.HTTP_503_SERVICE_UNAVAILABLE,
         "All translation engines are quota-exhausted",
+    )
+    pool_headroom_insufficient = _se(
+        status.HTTP_409_CONFLICT,
+        "Not enough key quota left for this run",
     )
     unable_to_resume_job = _se(
         status.HTTP_500_INTERNAL_SERVER_ERROR,

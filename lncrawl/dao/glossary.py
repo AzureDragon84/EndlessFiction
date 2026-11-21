@@ -2,7 +2,7 @@ from typing import Optional
 
 import sqlmodel as sa
 
-from ..enums import TermCategory, TermGender, TermStrategy
+from ..enums import TermCategory, TermGender, TermStrategy, TermVerdict
 from ._base import BaseTable
 
 
@@ -26,13 +26,31 @@ class GlossaryTerm(BaseTable, table=True):
         description="Stable public handle used in data-g markers, e.g. 't_7fk39m2q'",
     )
 
-    pinyin: Optional[str] = sa.Field(default=None, description="Romanised reading")
+    reading: Optional[str] = sa.Field(
+        default=None,
+        description="Romanised reading in the source language: pinyin, romaji or Hangul",
+    )
     category: Optional[TermCategory] = sa.Field(
         default=None,
         sa_column=sa.Column(sa.Enum(TermCategory, native_enum=False), nullable=True),
         description="What kind of thing the term names",
     )
     freq: int = sa.Field(default=0, description="Occurrences seen across crawled chapters")
+    found_by: Optional[str] = sa.Field(
+        default=None,
+        description="What found this term: `local` for the free scan, else the model id",
+    )
+    verdict: Optional[TermVerdict] = sa.Field(
+        default=None,
+        sa_column=sa.Column(sa.Enum(TermVerdict, native_enum=False), nullable=True),
+        description="Review verdict: null undecided, skip/fragment hidden by default",
+    )
+    judged_by: Optional[str] = sa.Field(
+        default=None, description="Model that last judged this term"
+    )
+    judged_at: Optional[int] = sa.Field(
+        default=None, sa_type=sa.BigInteger, description="When the verdict was judged"
+    )
     first_chapter_serial: Optional[int] = sa.Field(
         default=None, description="Chapter this term was first seen in"
     )
@@ -43,6 +61,50 @@ class GlossaryTerm(BaseTable, table=True):
         nullable=True,
         description="Canonical term this surface is a fragment of",
     )
+
+
+class GlossaryTermCount(BaseTable, table=True):
+    """Occurrences of one term in one chapter — the unit `freq` is derived from.
+
+    A scan replaces the rows for the chapters it read instead of adding to
+    `GlossaryTerm.freq`, so rescanning a batch leaves every number where it
+    was. `freq` is the sum of these rows, never a separate tally.
+    """
+
+    __tablename__ = "glossary_term_counts"  # type: ignore
+    __table_args__ = (sa.UniqueConstraint("term_id", "chapter_id"),)
+
+    term_id: str = sa.Field(foreign_key="glossary_terms.id", ondelete="CASCADE", index=True)
+    chapter_id: str = sa.Field(foreign_key="chapters.id", ondelete="CASCADE", index=True)
+    occurrences: int = sa.Field(
+        default=0,
+        sa_column=sa.Column(sa.Integer, nullable=False, server_default="0"),
+        description="Occurrences of the term in this chapter",
+    )
+
+
+class GlossaryScan(BaseTable, table=True):
+    """One extraction batch and what it did, so a rescan can be compared.
+
+    Counts are replaced per chapter, so a run's `new`/`updated` describe what
+    changed relative to the previous rows rather than how much text was read.
+    `found` is what was stored after the cap and `found_total` what the batch
+    actually produced, which is what makes a truncated run visible.
+    """
+
+    __tablename__ = "glossary_scans"  # type: ignore
+    __table_args__ = (sa.Index("ix_glossary_scan_lookup", "novel_id", "created_at"),)
+
+    novel_id: str = sa.Field(foreign_key="novels.id", ondelete="CASCADE", index=True)
+    first_chapter: int = sa.Field(default=0, description="First chapter index this batch covered")
+    requested: int = sa.Field(default=0, description="Chapters the batch asked for")
+    scanned: int = sa.Field(default=0, description="Chapters that had text to read")
+    found: int = sa.Field(default=0, description="Terms stored after the cap")
+    found_total: int = sa.Field(default=0, description="Terms produced before the cap")
+    new_terms: int = sa.Field(default=0, description="Terms this scan discovered")
+    updated_terms: int = sa.Field(default=0, description="Terms whose stored numbers changed")
+    cap: int = sa.Field(default=0, description="Term cap applied to this batch")
+    capped: bool = sa.Field(default=False, description="Whether the cap dropped terms")
 
 
 class GlossaryEntry(BaseTable, table=True):
@@ -65,6 +127,22 @@ class GlossaryEntry(BaseTable, table=True):
         description="Gender used for pronouns; unknown until a human decides",
     )
     version: int = sa.Field(default=1, description="Revision number of this decision")
+
+
+class GlossaryUserEntry(BaseTable, table=True):
+    """A reader's personal rendering for one term.
+
+    The admin glossary stays authoritative for translations; this only changes
+    what this user sees, so a disagreement never forks the stored chapter.
+    """
+
+    __tablename__ = "glossary_user_entries"  # type: ignore
+    __table_args__ = (sa.UniqueConstraint("user_id", "term_id", "language"),)
+
+    user_id: str = sa.Field(foreign_key="users.id", ondelete="CASCADE", index=True)
+    term_id: str = sa.Field(foreign_key="glossary_terms.id", ondelete="CASCADE")
+    language: str = sa.Field(description="Target language code, e.g. 'en'")
+    rendering: str = sa.Field(description="What this reader wants to see instead")
 
 
 class GlossaryCandidate(BaseTable, table=True):

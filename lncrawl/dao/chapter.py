@@ -66,11 +66,23 @@ class ChapterTranslation(BaseTable, table=True):
         description="Glossary revision this translation was produced under",
     )
 
+    @staticmethod
+    def mode_path(novel_id: str, serial: int, language: str, mode: str = "ai") -> str:
+        """Stored content for one reader mode.
+
+        AI translations keep the original path (they have a table row); the
+        keyless Web and Web+ passes are cached as files beside it, so glossary
+        changes never require a row or a re-translation to take effect.
+        """
+        name = getattr(mode, "value", mode)
+        suffix = "" if name == "ai" else f".{name}"
+        return f"novels/{novel_id}/chapters/{serial:06}.{language}{suffix}.zst"
+
     @computed_field  # type: ignore[misc]
     @property
     def content_file(self) -> str:
         """Translation content file path"""
-        return f"novels/{self.novel_id}/chapters/{self.chapter_serial:06}.{self.language}.zst"
+        return ChapterTranslation.mode_path(self.novel_id, self.chapter_serial, self.language)
 
     @computed_field  # type: ignore[misc]
     @property

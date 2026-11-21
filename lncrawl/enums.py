@@ -1,4 +1,5 @@
 from enum import Enum, IntEnum
+from typing import Any, Dict, Optional
 
 
 class UserRole(str, Enum):
@@ -148,15 +149,129 @@ class LanguageCode(str, Enum):
 
 
 class TermCategory(str, Enum):
+    """What kind of thing a term names, in the shape a translator works in.
+
+    These are the buckets a web-novel glossary is actually kept in: a realm and
+    the technique practised to reach it are different decisions, a formation is
+    not an array, and a title of address is not a person. `special` is the
+    deliberate catch-all — every candidate lands somewhere on the first pass,
+    and an editor drains it into the specific members as the sheet fills up.
+    """
+
     character = "character"
     location = "location"
     sect_org = "sect_org"
     rank_realm = "rank_realm"
     technique = "technique"
-    item = "item"
+    artifact = "artifact"
+    special = "special"
     honorific = "honorific"
     creature = "creature"
-    special = "special"
+    race = "race"
+    formation = "formation"
+    constitution = "constitution"
+    currency = "currency"
+    concept = "concept"
+    idiom = "idiom"
+
+
+# Member names stored before this set. Enum columns hold the name, so a rename
+# is a data change rather than a schema change: the migration script rewrites
+# the server's rows and the boot-time map covers SQLite, which never replays
+# scripts. Reading through `coerce_category()` keeps an old value usable in the
+# meantime. The neutral set in the middle of the list is what this fork shipped
+# first; `bloodline` went through `system` and comes back out as a physique.
+TERM_CATEGORY_RENAMES: Dict[str, TermCategory] = {
+    "place": TermCategory.location,
+    "organization": TermCategory.sect_org,
+    "title": TermCategory.honorific,
+    "rank": TermCategory.rank_realm,
+    "item": TermCategory.artifact,
+    "system": TermCategory.special,
+    "ship": TermCategory.special,
+    "event": TermCategory.special,
+    "other": TermCategory.special,
+    "bloodline": TermCategory.constitution,
+}
+
+
+def coerce_category(value: Any) -> Optional[TermCategory]:
+    """A category from a stored or proposed value, including a pre-§5.2 name."""
+    if isinstance(value, TermCategory):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    if not text:
+        return None
+    try:
+        return TermCategory(text)
+    except ValueError:
+        return TERM_CATEGORY_RENAMES.get(text)
+
+
+class TermVerdict(str, Enum):
+    """What review decided about a candidate surface.
+
+    `skip` is noise and `fragment` is a piece of a longer term, so both are
+    hidden from the default review sheet; `keep` was accepted and `merge`
+    points at a canonical term. Null (no verdict) is the undecided state.
+    """
+
+    keep = "keep"
+    skip = "skip"
+    fragment = "fragment"
+    merge = "merge"
+
+
+# What a model may call each verdict; a paid answer is prose until mapped.
+_VERDICT_WORDS = {
+    "keep": TermVerdict.keep,
+    "ok": TermVerdict.keep,
+    "term": TermVerdict.keep,
+    "skip": TermVerdict.skip,
+    "noise": TermVerdict.skip,
+    "common": TermVerdict.skip,
+    "fragment": TermVerdict.fragment,
+    "part": TermVerdict.fragment,
+    "partial": TermVerdict.fragment,
+    "merge": TermVerdict.merge,
+    "alias": TermVerdict.merge,
+    "variant": TermVerdict.merge,
+}
+
+
+def coerce_verdict(value: Any) -> Optional[TermVerdict]:
+    """A verdict from a stored, submitted or model-proposed value."""
+    if isinstance(value, TermVerdict):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    if not text:
+        return None
+    try:
+        return TermVerdict(text)
+    except ValueError:
+        return _VERDICT_WORDS.get(text)
+
+
+# Verdicts the review sheet keeps out of the way until "Show hidden" is on.
+HIDDEN_VERDICTS = (TermVerdict.skip, TermVerdict.fragment)
+
+
+class TranslationMode(str, Enum):
+    """How a chapter is presented to a reader.
+
+    `raw` serves the crawled source, `web` a keyless machine translation,
+    `web_plus` that translation with the glossary enforced, and `ai` the
+    keyed model translation with glossary and context.
+    """
+
+    raw = "raw"
+    web = "web"
+    web_plus = "web_plus"
+    ai = "ai"
 
 
 class TermGender(str, Enum):

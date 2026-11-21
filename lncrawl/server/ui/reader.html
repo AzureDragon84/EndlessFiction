@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Endless Fiction — Reader</title>
+  <link rel="stylesheet" href="/ui/assets/base.css" />
+  <link rel="stylesheet" href="/ui/assets/reader.css" />
+</head>
+<body class="reader">
+  <div id="login" hidden>
+    <form id="loginForm">
+      <h1>Endless Fiction</h1>
+      <p>Sign in to read. Starting new translation work is limited to the administrator.</p>
+      <input id="loginEmail" placeholder="Email" autocomplete="username" required />
+      <input id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" required />
+      <button class="btn primary" type="submit">Sign in</button>
+      <div id="loginError" class="error"></div>
+    </form>
+  </div>
+
+  <div id="app" class="reader-shell" hidden>
+    <aside class="shelf" id="shelf">
+      <a class="brand" href="/">Endless Fiction<span>Reader</span></a>
+      <div class="shelf-controls">
+        <select id="novelSelect" aria-label="Novel"></select>
+        <input id="chapterSearch" placeholder="Find a chapter…" aria-label="Find a chapter" />
+        <a class="btn ghost" id="adminLink" href="/admin" data-admin-only hidden>Admin Dashboard</a>
+      </div>
+      <div class="shelf-label"><span>Chapters</span><span id="chapterCount"></span></div>
+      <div class="chapter-list" id="chapterList"></div>
+    </aside>
+
+    <main class="reading">
+      <header class="topbar">
+        <button class="btn ghost" id="menuButton" aria-label="Toggle chapter list">☰</button>
+        <div class="modes" id="modes" role="group" aria-label="Reader mode">
+          <button class="mode" data-mode="raw" title="The crawled source text">Raw</button>
+          <button class="mode" data-mode="web" title="Keyless machine translation">Web</button>
+          <button class="mode" data-mode="web_plus" title="Machine translation with the glossary enforced">Web+</button>
+          <button class="mode" data-mode="ai" title="Model translation with glossary and context">AI</button>
+        </div>
+        <span class="pill" id="statusPill">—</span>
+        <div class="spacer"></div>
+        <button class="btn primary" id="translateButton" data-admin-only hidden>Translate chapter</button>
+        <a class="btn ghost" href="/">Library</a>
+        <span class="pill" data-user-name></span>
+        <button class="btn ghost" id="signOut">Sign out</button>
+      </header>
+
+      <div class="article" id="article">
+        <div class="chapter-head">
+          <div class="sub" id="chapterSub"></div>
+          <h1 id="chapterTitle">Choose a chapter</h1>
+        </div>
+        <div class="content" id="content"></div>
+        <div class="chapter-nav">
+          <button class="btn" id="prevButton">← Previous</button>
+          <button class="btn" id="nextButton">Next →</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="termDialog">
+    <div class="dialog-body">
+      <h3 id="termSource">Term</h3>
+      <div class="meta" id="termMeta"></div>
+
+      <div class="stack" id="glossaryBlock" data-admin-only hidden>
+        <label class="field">Glossary meaning — applies to every reader
+          <input id="termGlossary" placeholder="Admin decision" />
+        </label>
+        <div class="row end">
+          <button class="btn small" id="termSaveGlossary" type="button">Save glossary meaning</button>
+        </div>
+        <hr class="divider" />
+      </div>
+
+      <label class="field">My meaning — only you see this
+        <input id="termOverride" placeholder="Your wording for this term" />
+      </label>
+
+      <div class="dialog-actions">
+        <button class="btn ghost" id="termUseGlossary" type="button">Use glossary</button>
+        <button class="btn" id="termCancel" type="button">Cancel</button>
+        <button class="btn primary" id="termSaveOverride" type="button">Save my meaning</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="/ui/assets/api.js"></script>
+  <script src="/ui/assets/reader.js"></script>
+</body>
+</html>

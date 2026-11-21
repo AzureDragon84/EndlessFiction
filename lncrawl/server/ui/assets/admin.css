@@ -1,0 +1,169 @@
+/* Endless Fiction — Admin Dashboard. */
+
+.dash { display: grid; grid-template-columns: 224px minmax(0, 1fr); min-height: 100vh; }
+
+.rail {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  padding: 18px 12px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+.rail .brand { padding: 0 8px 14px; }
+.rail .rail-label {
+  padding: 12px 10px 4px;
+  font-size: 10px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: #6f6558;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.nav-item:hover { background: var(--panel-2); color: var(--text); }
+.nav-item.active { background: var(--accent-soft); color: var(--term); }
+.rail .foot { margin-top: auto; display: grid; gap: 6px; }
+
+.dash-main { min-width: 0; display: flex; flex-direction: column; }
+.dash-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 26px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: rgba(18, 16, 14, .95);
+  backdrop-filter: blur(6px);
+  z-index: 5;
+  flex-wrap: wrap;
+}
+.dash-bar h1 { font-size: 19px; margin: 0; }
+.dash-body { padding: 24px 26px 80px; display: grid; gap: 20px; align-content: start; }
+.panel { display: none; gap: 20px; }
+.panel.active { display: grid; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.stat .label { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.stat .value { font-family: var(--serif); font-size: 27px; margin-top: 5px; font-variant-numeric: tabular-nums; }
+.stat .note { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+/* A grid item defaults to min-width: auto, so one wide table stretched the
+   whole split past the viewport. Zero it and let the table's own wrapper
+   scroll instead. */
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+.split > * { min-width: 0; }
+.stack { display: grid; gap: 16px; }
+/* Items size to their content: a stretched label hands the extra height to the
+   input inside it, which is how a 6-row multi-select made its siblings look
+   half empty. */
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: start; }
+/* A listbox paints its own rows, so the theme has to reach the options. */
+select[multiple] { padding: 6px 8px; }
+select[multiple] option { background: var(--panel-2); color: var(--text); padding: 3px 4px; }
+.table-wrap { overflow: auto; max-height: 62vh; border: 1px solid var(--line); border-radius: 10px; }
+.table-wrap table { width: 100%; table-layout: fixed; }
+.table-wrap th, .table-wrap td { overflow-wrap: anywhere; white-space: pre-wrap; }
+.table-wrap thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+/* The review sheet has fixed-width columns: without them `table-layout: fixed`
+   splits 990 px seven ways, breaking "SOURCE" and clipping the actions. The
+   table keeps a readable minimum and scrolls inside its wrapper, never the
+   page. */
+#termTable table { min-width: 720px; }
+#termTable th:nth-child(1) { width: 20%; }
+#termTable th:nth-child(2) { width: 18%; }
+#termTable th:nth-child(3) { width: 14%; }
+#termTable th:nth-child(4),
+#termTable th:nth-child(5) { width: 7%; }
+#termTable th:nth-child(6) { width: 14%; }
+#termTable th:nth-child(7) { width: 20%; }
+#termTable td.actions { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.modes.compact .mode { padding: 5px 12px; font-size: 11.5px; }
+
+.model-list { display: grid; gap: 10px; }
+.model-row {
+  display: grid;
+  grid-template-columns: minmax(0, .85fr) minmax(0, 1.25fr) minmax(0, .95fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+.model-row [data-role="model"] { grid-column: 1 / -1; width: 100%; }
+.model-row input[type="number"] {
+  width: 100%;
+  padding: 6px 5px;
+  font-size: 11.5px;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+.model-row input[type="number"]::-webkit-outer-spin-button,
+.model-row input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.model-row select { width: 100%; padding: 7px 8px; font-size: 12px; }
+.model-row .btn { padding: 6px 9px; font-size: 11px; }
+#modelAdd { width: 100%; max-width: 100%; }
+
+#keyHealthTable td.detail { min-width: 170px; max-width: 340px; font-size: 11.5px; color: var(--muted); }
+.health-models { display: grid; gap: 4px; }
+.health-model { display: flex; align-items: center; gap: 6px; font-size: 11.5px; }
+.health-model .tag { padding: 1px 6px; font-size: 10px; }
+
+.log {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  background: #100e0c;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.bar { height: 5px; border-radius: 999px; background: var(--panel-3); overflow: hidden; min-width: 70px; }
+.bar > span { display: block; height: 100%; background: var(--accent); }
+
+.pager { display: flex; align-items: center; gap: 8px; justify-content: flex-end; font-size: 12px; color: var(--muted); }
+
+.kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 12px; font-size: 12.5px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; }
+
+@media (max-width: 900px) {
+  .dash { grid-template-columns: 1fr; }
+  .rail {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 10px 12px;
+  }
+  .rail .brand { padding: 0 10px 0 4px; }
+  .rail .rail-label { display: none; }
+  .nav-item { width: auto; }
+  .rail .foot { margin: 0 0 0 auto; }
+  .dash-body { padding: 18px 14px 60px; }
+}

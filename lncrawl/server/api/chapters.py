@@ -3,7 +3,15 @@ from typing import List, Optional
 from fastapi import APIRouter, Path, Query, Security
 
 from ...context import ctx
-from ...dao import ActivityType, Chapter, ChapterImage, Job, LanguageCode, User
+from ...dao import (
+    ActivityType,
+    Chapter,
+    ChapterImage,
+    Job,
+    LanguageCode,
+    TranslationMode,
+    User,
+)
 from ...exceptions import ServerErrors
 from ..models import ReadChapterResponse
 from ..security import ensure_user
@@ -46,6 +54,10 @@ def read_chapter(
         default=None,
         description="Fetch content automatically if not available",
     ),
+    mode: TranslationMode = Query(
+        default=TranslationMode.ai,
+        description="Reader mode: raw, web, web_plus or ai",
+    ),
 ) -> ReadChapterResponse:
     ctx.activity.record(user.id, ActivityType.CHAPTER, chapter_id)
     if language:
@@ -55,6 +67,7 @@ def read_chapter(
         chapter_id,
         language=language,
         auto_fetch=auto_fetch,
+        mode=mode,
     )
 
 
@@ -74,11 +87,17 @@ def translate_chapter(
     user: User = Security(ensure_user),
     chapter_id: str = Path(),
     language: LanguageCode = Query(description="Target language code, e.g. 'fr', 'zh-CN'"),
+    mode: TranslationMode = Query(
+        default=TranslationMode.ai,
+        description="Which pass to run: web, web_plus or ai (raw needs no job)",
+    ),
 ) -> Job:
     if not ctx.config.translator.enabled:
         raise ServerErrors.translation_disabled
-    if not ctx.tier.translation_enabled(user):
+    if not ctx.tier.can_start_translation(user):
         raise ServerErrors.tier_not_allowed
+    if mode in (TranslationMode.web, TranslationMode.web_plus):
+        return ctx.jobs.translate_chapter(user, chapter_id, language, mode=mode)
     job = ctx.jobs.get_chapter_translation_job(user.id, chapter_id, language)
     if not job:
         job = ctx.jobs.translate_chapter(user, chapter_id, language)

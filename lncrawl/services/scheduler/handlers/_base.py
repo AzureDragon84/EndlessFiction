@@ -9,6 +9,7 @@ from ....context import ctx
 from ....core.diagnosis import describe, diagnosis_extra
 from ....dao import Job, JobStatus
 from ....exceptions import AbortedException, ScraperErrorGroup
+from ....services.key_pool import PoolExhausted
 from ....utils.error_tools import full_traceback, unexpected_message
 from ....utils.time_utils import current_timestamp
 
@@ -112,10 +113,36 @@ class BaseHandler(ABC):
         ctx.job_notifier.notify(self.user, self.job)
         return False
 
+    def _set_paused(self, retry_after: int, reason: str = "") -> bool:
+        """Park the job until the key pool resets, instead of failing it.
+
+        A failed full-novel translation is expensive to notice and restart; a
+        pause keeps its progress, and the scheduler picks it up again once
+        `resume_at` passes (see `JobService._pending`).
+        """
+        now = current_timestamp()
+        self._set_extra(
+            resume_at=now + max(1, int(retry_after)) * 1000,
+            paused_at=now,
+            pause_reason=reason or "daily quota exhausted",
+        )
+        with ctx.db.session() as sess:
+            ctx.jobs._update(sess, self.job.id, status=JobStatus.PAUSED, error=None)
+            sess.commit()
+            self.job = sess.get_one(Job, self.job.id)
+
+        ctx.logger.info(
+            f"[yellow]PAUSED[/yellow] [b]{self.job.id}[/b] | resuming in {retry_after}s"
+        )
+        ctx.job_notifier.notify(self.user, self.job)
+        return False
+
     def _guarded(self, on_success: Callable[[], bool]) -> bool:
         try:
             self.run()
             return on_success()
+        except PoolExhausted as e:
+            return self._set_paused(e.retry_after_seconds, str(e))
         except AbortedException:
             return False  # ignore error
         except HandlerException as e:

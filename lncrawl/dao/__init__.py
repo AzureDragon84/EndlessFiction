@@ -14,7 +14,10 @@ from .glossary import (
     GlossaryEntry,
     GlossaryOverride,
     GlossaryRevision,
+    GlossaryScan,
     GlossaryTerm,
+    GlossaryTermCount,
+    GlossaryUserEntry,
 )
 from .job import Job
 from .library import Library, LibraryFavorite, LibraryNovel
@@ -38,10 +41,13 @@ models: List[Type[SQLModel]] = [
     NovelTranslation,
     NovelGlossary,
     GlossaryTerm,
+    GlossaryTermCount,
+    GlossaryScan,
     GlossaryEntry,
     GlossaryCandidate,
     GlossaryOverride,
     GlossaryRevision,
+    GlossaryUserEntry,
     Volume,
     VolumeTranslation,
     Chapter,

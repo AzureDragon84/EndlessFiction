@@ -90,6 +90,8 @@ class DB:
             self._bootstrap_sqlite()
         else:
             self._bootstrap_server(reset_on_failure)
+        self._remap_term_categories()
+        self._backfill_term_readings()
 
     def _bootstrap_fresh(self):
         """Build the current schema directly from models, skipping history."""
@@ -164,6 +166,61 @@ class DB:
             count = backfill_legacy_glossaries(conn)
         if count:
             logger.info(f"Backfilled {count} legacy glossary term(s) into rows.")
+
+    def _remap_term_categories(self) -> None:
+        """Rename term categories stored before the language-neutral set.
+
+        Enum columns hold the member name, so renaming a member is data, not
+        schema: the fingerprint does not change and SQLite never replays a
+        migration script. The same map ships in the migration for the server
+        dialects; this pass covers the single-user path, and every UPDATE is
+        idempotent.
+        """
+        from sqlalchemy import inspect, text
+
+        from ..enums import TERM_CATEGORY_RENAMES
+
+        try:
+            tables = inspect(self.engine).get_table_names()
+        except Exception:
+            logger.warning("Could not inspect the database for category renames", exc_info=True)
+            return
+        if "glossary_terms" not in tables:
+            return
+        with self.engine.begin() as conn:
+            for old, new in TERM_CATEGORY_RENAMES.items():
+                conn.execute(
+                    text('UPDATE "glossary_terms" SET "category" = :new WHERE "category" = :old'),
+                    {"new": new.value, "old": old},
+                )
+
+    def _backfill_term_readings(self) -> None:
+        """Copy the legacy `pinyin` column into `reading` on SQLite.
+
+        A rename is non-additive, so the additive sync adds `reading` and leaves
+        `pinyin` behind; without this pass every stored reading would look
+        empty on the desktop path. Server dialects replay the migration instead.
+        Idempotent: after the first copy the WHERE clause matches nothing.
+        """
+        from sqlalchemy import exc, inspect, text
+
+        try:
+            columns = {
+                column["name"] for column in inspect(self.engine).get_columns("glossary_terms")
+            }
+        except exc.NoSuchTableError:
+            return
+        if not {"pinyin", "reading"} <= columns:
+            return
+        with self.engine.begin() as conn:
+            copied = conn.execute(
+                text(
+                    'UPDATE "glossary_terms" SET "reading" = "pinyin"'
+                    ' WHERE "reading" IS NULL AND "pinyin" IS NOT NULL'
+                )
+            ).rowcount
+        if copied:
+            logger.info(f"Copied {copied} glossary reading(s) from the pinyin column.")
 
     def _bootstrap_server(self, reset_on_failure: bool = False):
         """Run real Alembic migrations for Postgres/MySQL deployments."""

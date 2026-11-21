@@ -2,7 +2,7 @@ from typing import FrozenSet, Optional
 
 from ..context import ctx
 from ..dao import User
-from ..enums import JobPriority, OutputFormat, UserTier
+from ..enums import JobPriority, OutputFormat, UserRole, UserTier
 
 
 class AccessManager:
@@ -19,11 +19,6 @@ class AccessManager:
     _AUTO_FETCH_ENABLED = {
         UserTier.BASIC: False,
         UserTier.PREMIUM: False,
-        UserTier.VIP: True,
-    }
-    _TRANSLATION_ENABLED = {
-        UserTier.BASIC: True,
-        UserTier.PREMIUM: True,
         UserTier.VIP: True,
     }
     _BATCH_TRANSLATION_ENABLED = {
@@ -94,7 +89,18 @@ class AccessManager:
         return self._AUTO_FETCH_ENABLED[user.tier]
 
     def translation_enabled(self, user: User) -> bool:
-        return ctx.config.translator.enabled and self._TRANSLATION_ENABLED[user.tier]
+        """Whether this user may start new translation work.
+
+        Translation spends the owner's model quota, so it is admin-only. Readers
+        still get translations that already exist (see `can_read_translation`).
+        """
+        return ctx.config.translator.enabled and user.role == UserRole.ADMIN
+
+    def can_start_translation(self, user: User) -> bool:
+        return self.translation_enabled(user)
+
+    def can_read_translation(self, user: User) -> bool:
+        return ctx.config.translator.enabled
 
     def batch_translation_enabled(self, user: User) -> bool:
         return self.translation_enabled(user) and self._BATCH_TRANSLATION_ENABLED[user.tier]

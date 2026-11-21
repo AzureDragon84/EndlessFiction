@@ -336,6 +336,7 @@ class JobService:
         *,
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
+        mode: Any = "ai",
         **data: Any,
     ) -> Job:
         chapter = ctx.chapters.get(chapter_id)
@@ -344,6 +345,7 @@ class JobService:
                 "chapter_id": chapter_id,
                 "chapter_serial": chapter.serial,
                 "language": language,
+                "mode": getattr(mode, "value", mode),
             }
         )
         if not data.get("novel_title"):
@@ -367,6 +369,7 @@ class JobService:
         user: User,
         *chapter_ids: str,
         language: LanguageCode,
+        mode: Any = "ai",
         parent_id: Optional[str] = None,
         depends_on: Optional[str] = None,
         **data: Any,
@@ -375,6 +378,7 @@ class JobService:
             {
                 "chapter_ids": list(chapter_ids),
                 "language": language,
+                "mode": getattr(mode, "value", mode),
             }
         )
         return self._create(
@@ -862,10 +866,17 @@ class JobService:
                 Job.status == JobStatus.RUNNING,
                 Job.done == 0,
             )
+            # A job paused for quota comes back on its own once the pool resets.
+            # `resume_at` is a UNIX-ms stamp the pause wrote into `extra`.
+            resumable = sq.and_(
+                Job.status == JobStatus.PAUSED,
+                Job.extra["resume_at"].as_integer() <= current_timestamp(),
+            )
             stmt = stmt.where(
                 sq.or_(
                     Job.status == JobStatus.PENDING,
                     job_is_new,
+                    resumable,
                 )
             )
 

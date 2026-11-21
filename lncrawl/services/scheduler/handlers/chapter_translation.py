@@ -1,5 +1,5 @@
 from ....context import ctx
-from ....enums import JobType
+from ....enums import JobType, TranslationMode
 from ._base import BaseHandler, HandlerException
 
 
@@ -24,8 +24,10 @@ class ChapterTranslationHandler(BaseHandler):
         if not self.job.is_running:
             self._set_running()
 
+        mode = TranslationMode(self.job.extra.get("mode") or "ai")
         ctx.translator.translate_chapter(
             chapter=chapter,
             target=language,
             signal=self.signal,
+            mode=mode,
         )

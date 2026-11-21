@@ -6,16 +6,21 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
 from ..assets.version import get_version
 from ..context import ctx
 from ..exceptions import ServerErrors, get_exception_handlers
 from .api import router as api
-from .api.translator import TranslatorDashboard
 from .middleware.staticfiles import CustomStaticFiles, StaticFilesGuard
 
 web_dir = (Path(__file__).parent / "web").absolute()
+ui_dir = (Path(__file__).parent / "ui").absolute()
+
+# Loaded as a classic script, before the SPA bundle, on the SPA shell only.
+# The SPA is generated output; this is the seam that hands its reader and
+# translator routes over to the pages this project owns.
+SPA_BRIDGE = '<script src="/ui/spa-bridge.js"></script>'
 
 
 @asynccontextmanager
@@ -79,17 +84,6 @@ if ctx.config.server.enable_browse_route:
 # Add APIs
 app.include_router(api, prefix="/api")
 
-# Mount the embedded translator dashboard (admin-gated ASGI wrapper)
-app.mount("/api/translator", TranslatorDashboard(), name="translator-dashboard")
-
-
-# The dashboard's relative asset URLs only resolve under the prefix with a
-# trailing slash; the SPA catch-all would otherwise swallow the bare path.
-@app.get("/api/translator", include_in_schema=False)
-async def translator_dashboard_root(request: Request) -> RedirectResponse:
-    query = str(request.url.query)
-    return RedirectResponse("/api/translator/" + (f"?{query}" if query else ""))
-
 
 # Mount static files
 app.mount("/static", CustomStaticFiles(), name="static")
@@ -108,6 +102,101 @@ async def health():
     }
 
 
+def _page(name: str) -> HTMLResponse:
+    text = (ui_dir / name).read_text(encoding="utf-8")
+    return HTMLResponse(
+        text,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+# The SPA's Read button navigates to `/read/<chapter id>` and its translator
+# entry to `/translator`; both are served here instead of the SPA shell.
+# Reader and dashboard styles and scripts. Kept outside `server/web/` because
+# that directory is generated build output, and served no-cache because these
+# file names are not content-hashed.
+@app.get("/ui/{path:path}", include_in_schema=False)
+async def serve_ui(path: str) -> FileResponse:
+    target = (ui_dir / path).resolve()
+    if not target.is_relative_to(ui_dir) or not target.is_file():
+        raise ServerErrors.not_found
+    mime_type, _ = mimetypes.guess_type(target)
+    return FileResponse(
+        target,
+        media_type=mime_type or "application/octet-stream",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
+
+
+@app.get("/read", include_in_schema=False)
+@app.get("/read/", include_in_schema=False)
+@app.get("/read/{chapter_id}", include_in_schema=False)
+@app.get("/read/{chapter_id}/{language}", include_in_schema=False)
+async def serve_reader(
+    chapter_id: str = "",
+    language: str = "",
+) -> HTMLResponse:
+    return _page("reader.html")
+
+
+@app.get("/admin", include_in_schema=False)
+@app.get("/admin/", include_in_schema=False)
+async def serve_admin() -> HTMLResponse:
+    return _page("admin.html")
+
+
+@app.get("/reader", include_in_schema=False)
+@app.get("/reader/", include_in_schema=False)
+async def serve_legacy_reader() -> RedirectResponse:
+    return RedirectResponse("/read", status_code=307)
+
+
+# The translator package's dashboard used to be mounted here. Its settings now
+# live in the Admin Dashboard, together with the glossary and chapter lanes.
+@app.get("/translator", include_in_schema=False)
+@app.get("/api/translator", include_in_schema=False)
+@app.get("/api/translator/{rest:path}", include_in_schema=False)
+async def retired_translator_dashboard(
+    request: Request,
+    rest: str = "",
+) -> RedirectResponse:
+    query = str(request.url.query)
+    return RedirectResponse("/admin" + (f"?{query}" if query else ""), status_code=307)
+
+
+# The SPA's worker answers every navigation with the app shell, so once it is
+# installed a returning visitor's `/read/...` and `/admin` requests never reach
+# these routes. Its navigation denylist is the only supported place to declare a
+# server-rendered page, so the worker is served with this project's routes added
+# to it. A worker that no longer has that shape is served untouched, because a
+# blind rewrite would be worse than the shell winning a race.
+_SW_DENYLIST = (
+    "{denylist:[/^\\/api/,/^\\/static/,/^\\/docs/,/^\\/health/]}",
+    "{denylist:[/^\\/api/,/^\\/static/,/^\\/docs/,/^\\/health/,/^\\/admin/,/^\\/read/,/^\\/reader/,/^\\/ui/]}",
+)
+
+
+@app.get("/sw.js", include_in_schema=False)
+async def serve_service_worker() -> Response:
+    text = (web_dir / "sw.js").read_text(encoding="utf-8")
+    original, patched = _SW_DENYLIST
+    if original in text:
+        text = text.replace(original, patched)
+    return Response(
+        text,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+def _spa_shell() -> str:
+    """The generated SPA index, with the bridge script added on the way out."""
+    html = (web_dir / "index.html").read_text(encoding="utf-8")
+    if SPA_BRIDGE in html:
+        return html
+    return html.replace("</body>", f"  {SPA_BRIDGE}\n  </body>")
+
+
 # Mount frontend
 @app.get("/{fallback:path}", include_in_schema=False)
 async def serve_web(fallback: str):
@@ -120,12 +209,17 @@ async def serve_web(fallback: str):
     loop = asyncio.get_event_loop()
     if not await loop.run_in_executor(None, target_file.is_file):
         target_file = web_dir / "index.html"
+    if target_file.name == "index.html":
+        return HTMLResponse(
+            await loop.run_in_executor(None, _spa_shell),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
     mime_type, _ = mimetypes.guess_type(target_file)
     if not mime_type:
         mime_type = "application/octet-stream"
     if mime_type == "text/javascript":
         mime_type = "application/javascript"
-    if target_file.name in {"index.html", "sw.js", "registerSW.js"}:
+    if target_file.name in {"sw.js", "registerSW.js"}:
         return FileResponse(
             target_file,
             media_type=mime_type,
