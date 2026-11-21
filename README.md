@@ -1,19 +1,27 @@
+## Open in Colab
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AzureDragon84/EndlessFiction/blob/project-alpha/colab.ipynb)
+
+**[Open in Colab →](https://colab.research.google.com/github/AzureDragon84/EndlessFiction/blob/project-alpha/colab.ipynb)**
+
+[`colab.ipynb`](colab.ipynb) boots this server in a free Colab runtime, keeps its data in the
+`data` folder of your Google Drive, and publishes it at a public
+`https://&hellip;.trycloudflare.com` address — the notebook prints the link, and `/admin` is the
+Admin Dashboard. It runs exactly this code: the Cloudflare tunnel is only the front door, and
+no Cloudflare account or token is needed — only a private GitHub repository needs one, saved
+as the `GITHUB_TOKEN` Colab secret. Run the first cell and click the link it prints; the
+server stops when the notebook stops.
+
+> GitHub's "Open in Colab" button can only fetch a notebook from a **public** repository. If
+> this one is private, open it with **File → Open notebook → GitHub** in Colab instead (and
+> add the `GITHUB_TOKEN` secret so the clone cell can reach it).
+
 > **EndlessFiction** — this repository is a working fork of
 > [lncrawl/lightnovel-crawler](https://github.com/lncrawl/lightnovel-crawler), imported at
 > upstream `dev` @ `59b0382d`. It is licensed GPL-3.0, exactly like upstream, and the
 > original license and copyright are preserved. Changes live on top of the imported history;
 > pull upstream updates with `git fetch upstream dev && git merge upstream/dev`.
 > Everything below is upstream's own documentation.
-
-## Run it in Colab
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AzureDragon84/EndlessFiction/blob/project-alpha/colab.ipynb)
-
-[`colab.ipynb`](colab.ipynb) boots this server in a free Colab runtime, keeps its data in the
-`data` folder of your Google Drive, and publishes it at a public
-`https://&hellip;.trycloudflare.com` address — the notebook prints the link, and `/admin` is the
-Admin Dashboard. It runs exactly this code: the Cloudflare tunnel is only the front door, and
-no account or token is needed.
 
 <div align="center">
 

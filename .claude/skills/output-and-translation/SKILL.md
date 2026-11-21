@@ -65,8 +65,7 @@ and persistence; the package owns engines, routing lanes, rate limits, retries, 
   registered for the novel's language (`services/glossary_profile.py`: zh/en/ja/ko plus a
   fallback that takes over with a logged warning when an optional dependency is missing),
   and `Novel.extra["translation_style"]` (read through `ctx.terms.translation_style`)
-  carries the per-novel name order, honorific policy and category shortlist into the paid
-  prompts. `services/glossary.py` archives every proposal (accepted or not)
+  carries the per-novel honorific policy and category shortlist into the paid prompts. `services/glossary.py` archives every proposal (accepted or not)
   in `glossary_candidates`. Editor writes go through `services/glossary.py` and are `locked`,
   so an engine merge never overwrites them;
   `NovelGlossary.revision` bumps once per batch that changed something. Chapter translation dedupes via a

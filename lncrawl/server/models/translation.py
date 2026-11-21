@@ -76,7 +76,6 @@ class StyleRequest(BaseModel):
     honorifics: Optional[str] = Field(
         default=None, description="strip or keep a character's honorific"
     )
-    name_order: Optional[str] = Field(default=None, description="family-given or given-family")
     categories: Optional[List[str]] = Field(
         default=None, description="Enabled categories; empty means every category"
     )

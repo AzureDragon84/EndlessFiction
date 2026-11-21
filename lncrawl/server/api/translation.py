@@ -112,23 +112,16 @@ def _language(value: str) -> str:
 
 
 def _style_note(style: Dict[str, Any]) -> str:
-    """The novel's house style as one instruction line for a paid prompt.
+    """The novel's honorific policy as one instruction line for a paid prompt.
 
-    Name order and honorific policy are the two decisions a rendering cannot
-    make for itself: `Zhao Chen` is the same characters as `Chen Zhao`, and a
-    sect master either keeps the title or does not.
+    A rendering cannot decide this for itself: a sect master either keeps the
+    title or does not.
     """
-    order = (
-        "Write character names given name first (Chen Zhao)."
-        if style.get("name_order") == "given-family"
-        else "Write character names family name first (Zhao Chen)."
-    )
-    honorifics = (
+    return (
         "Keep a character's honorific with the name (Sect Master Zhao)."
         if style.get("honorifics") == "keep"
         else "Drop honorifics from renderings and translate the name alone."
     )
-    return f"{order} {honorifics}"
 
 
 # ------------------------------------------------------------------ #
@@ -463,7 +456,6 @@ def glossary_set_style(novel_id: str = Path(), body: StyleRequest = Body()) -> D
     ctx.terms.set_translation_style(
         novel_id,
         honorifics=body.honorifics,
-        name_order=body.name_order,
         categories=body.categories,
         language=body.language,
     )

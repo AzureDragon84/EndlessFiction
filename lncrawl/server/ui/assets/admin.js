@@ -858,14 +858,6 @@
     $("styleLanguage").innerHTML = options.join("");
     $("styleLanguage").value = stored;
 
-    $("styleNameOrder").innerHTML = (data.name_orders || [])
-      .map(
-        (value) =>
-          `<option value="${value}">${value === "given-family" ? "Given name first" : "Family name first"}</option>`,
-      )
-      .join("");
-    $("styleNameOrder").value = style.name_order || "family-given";
-
     $("styleHonorifics").innerHTML = (data.honorific_policies || [])
       .map(
         (value) =>
@@ -895,7 +887,6 @@
         method: "PUT",
         body: JSON.stringify({
           language: $("styleLanguage").value,
-          name_order: $("styleNameOrder").value,
           honorifics: $("styleHonorifics").value,
           // "every category selected" is stored as "no restriction".
           categories: picked.length === all.length ? [] : picked,

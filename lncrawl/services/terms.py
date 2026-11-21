@@ -67,15 +67,13 @@ NO_LIMIT = 2000
 LLM_CHUNK_CHARS = 8000
 
 # Per-novel rendering style, stored in `Novel.extra` rather than a table: it is
-# three settings about one novel, not a record with a life of its own.
+# two settings about one novel, not a record with a life of its own.
 STYLE_KEY = "translation_style"
 STYLE_DEFAULTS: Dict[str, Any] = {
     "honorifics": "strip",
-    "name_order": "family-given",
     "categories": [],
 }
 HONORIFIC_POLICIES = ("strip", "keep")
-NAME_ORDERS = ("family-given", "given-family")
 
 
 def _clean_categories(names: Iterable[Any]) -> List[str]:
@@ -94,8 +92,6 @@ def _clean_style(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, dict):
         if raw.get("honorifics") in HONORIFIC_POLICIES:
             style["honorifics"] = raw["honorifics"]
-        if raw.get("name_order") in NAME_ORDERS:
-            style["name_order"] = raw["name_order"]
         style["categories"] = _clean_categories(raw.get("categories") or [])
     return style
 
@@ -1165,9 +1161,9 @@ class TermService:
     def translation_style(self, novel_id: str) -> Dict[str, Any]:
         """The novel's rendering style, with defaults filled in and validated.
 
-        Honorific policy, name order and enabled categories steer the paid
-        prompts and the review sheet's category picker; the free scan is not
-        affected, because its rules are language rules, not house style.
+        Honorific policy and enabled categories steer the paid prompts and the
+        review sheet's category picker; the free scan is not affected, because
+        its rules are language rules, not house style.
         """
         novel = ctx.novels.get(novel_id)
         return _clean_style((novel.extra or {}).get(STYLE_KEY) if novel else None)
@@ -1177,7 +1173,6 @@ class TermService:
         novel_id: str,
         *,
         honorifics: Optional[str] = None,
-        name_order: Optional[str] = None,
         categories: Optional[Sequence[str]] = None,
         language: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -1202,13 +1197,6 @@ class TermService:
                         f"Unknown honorific policy {value!r}; expected strip or keep."
                     )
                 style["honorifics"] = value or STYLE_DEFAULTS["honorifics"]
-            if name_order is not None:
-                value = str(name_order).strip().lower()
-                if value not in ("", *NAME_ORDERS):
-                    raise ServerErrors.invalid_input.with_extra(
-                        f"Unknown name order {value!r}; expected family-given or given-family."
-                    )
-                style["name_order"] = value or STYLE_DEFAULTS["name_order"]
             if categories is not None:
                 style["categories"] = _clean_categories(categories)
             extra = dict(novel.extra or {})
@@ -1240,7 +1228,6 @@ class TermService:
             "profiles": describe_profiles(),
             "style": self.translation_style(novel_id),
             "honorific_policies": list(HONORIFIC_POLICIES),
-            "name_orders": list(NAME_ORDERS),
             "categories": [category.value for category in TermCategory],
         }
 
