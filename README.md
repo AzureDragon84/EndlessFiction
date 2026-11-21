@@ -1,3 +1,15 @@
+## Open in Colab
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AzureDragon84/EndlessFiction/blob/main/colab.ipynb)
+
+The `colab.ipynb` notebook boots this server in a free Colab runtime, keeps its data in the
+`data` folder of your Google Drive, and prints a public `https://….trycloudflare.com`
+address; `/admin` is the Admin Dashboard. No Cloudflare account or tunnel setup is needed.
+Run the first cell and click the link it prints; stopping the notebook stops the server.
+
+A private repository also needs a read token saved as the `GITHUB_TOKEN` Colab secret, and its
+badge cannot open the notebook — use **File → Open notebook → GitHub** there instead.
+
 > **EndlessFiction** — this repository is a working fork of
 > [lncrawl/lightnovel-crawler](https://github.com/lncrawl/lightnovel-crawler), imported at
 > upstream `dev` @ `59b0382d`. It is licensed GPL-3.0, exactly like upstream, and the
