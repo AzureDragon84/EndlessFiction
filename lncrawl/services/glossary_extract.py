@@ -27,9 +27,6 @@ from .glossary_profile import non_latin, profile_for
 MIN_FREQ = 2
 # Latin names are noisier, because a capitalised word also starts sentences.
 LATIN_MIN_FREQ = 3
-# Surfaces stored per scan, highest frequency first. A chapter's recurring names
-# can easily outnumber the old cap of 40; the review sheet is cheap to scan.
-MAX_TERMS = 200
 # A short surface whose occurrences are almost all inside a longer kept one is
 # a fragment of it, not a term: `云宗` inside `青云宗`.
 SUBSUMPTION = 0.8
@@ -57,7 +54,7 @@ def extract_terms(
     pages: Iterable[Tuple[int, str]],
     *,
     language: Optional[str] = None,
-    limit: int = MAX_TERMS,
+    limit: Optional[int] = None,
     min_freq: int = MIN_FREQ,
 ) -> List[ExtractedTerm]:
     """Rank the recurring surfaces of `pages` — (chapter serial, chapter text).
@@ -66,8 +63,11 @@ def extract_terms(
     it into candidate surfaces; everything after that is arithmetic. `language`
     selects the profile (a 20-chapter batch of Japanese is not segmented the
     Chinese way) and the reading that comes back with it. `min_freq` and `limit`
-    are settings rather than constants because the admin extract tab rescans in
+    are settings rather than constants because the glossary tab rescans in
     batches and a short chapter needs a lower bar than a whole-novel scan.
+    `limit` is optional: unset stores every surface that passed the rules, ranked
+    highest frequency first. A cap that is not asked for drops the tail of a
+    batch silently, which is how a scan looked complete at exactly 200 terms.
     """
     profile = profile_for(language)
     texts = [(serial, _plain_text(text)) for serial, text in pages]
@@ -101,21 +101,8 @@ def extract_terms(
             reading=profile.reading(source),
             chapter_counts=tuple(sorted(per_chapter.get(source, {}).items())),
         )
-        for source, freq in ranked[: max(1, limit)]
+        for source, freq in (ranked[: max(1, limit)] if limit else ranked)
     ]
-
-
-def plausible_surface(surface: str) -> bool:
-    """Whether a proposed surface is worth counting at all.
-
-    A model occasionally answers with one character, a number or a punctuation
-    mark. Two characters in a non-Latin script or three Latin ones is the same
-    floor the local scan applies, so both modes agree on what is too short.
-    """
-    text = str(surface or "").strip()
-    if not text:
-        return False
-    return len(text) >= 2 if non_latin(text) else len(text) >= 3
 
 
 def _plain_text(text: str) -> str:

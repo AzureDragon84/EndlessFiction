@@ -19,7 +19,7 @@ import logging
 import re
 from typing import Any, Callable, ClassVar, Dict, List, Optional, Sequence, Tuple, Type, TypeVar
 
-from pydantic import AliasChoices, BaseModel, Field, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from ..context import ctx
 from ..enums import TermCategory, coerce_category
@@ -144,19 +144,6 @@ class RenderingItem(TermItem):
 
 
 class CategoryItem(TermItem):
-    category: str = ""
-    value_field: ClassVar[str] = "category"
-
-
-class SurfaceItem(TermItem):
-    """One surface a model named as a term, with the category it proposes.
-
-    The extraction prompt asks for `surface` and `category`; `source` is
-    accepted too, so the tolerant reader's map fallback and the other tasks'
-    contract keep validating against the same base.
-    """
-
-    source: str = Field(validation_alias=AliasChoices("surface", "source"))
     category: str = ""
     value_field: ClassVar[str] = "category"
 

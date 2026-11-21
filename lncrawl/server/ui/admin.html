@@ -26,8 +26,7 @@
       <div class="rail-label">Translation</div>
       <button class="nav-item active" data-panel="overview">Overview</button>
       <button class="nav-item" data-panel="keys">Keys &amp; models</button>
-      <button class="nav-item" data-panel="extract">Glossary extraction</button>
-      <button class="nav-item" data-panel="glossary">Glossary translation</button>
+      <button class="nav-item" data-panel="glossary">Glossary</button>
       <button class="nav-item" data-panel="chapters">Chapter translation</button>
       <div class="rail-label">System</div>
       <button class="nav-item" data-panel="settings">Settings</button>
@@ -163,55 +162,53 @@
           </div>
         </section>
 
-        <!-- ------------------------------------------------------- extract -->
-        <section class="panel" id="panel-extract">
-          <div class="card">
-            <h2>Glossary extraction</h2>
-            <p class="hint">
-              Scan crawled chapters for recurring names, sects, techniques and items. Frequency is
-              added to existing terms; decisions are never touched. The scan is free; Decide batch
-              settles the terms it found — verdict, category and English rendering — in one paid
-              call.
-            </p>
-            <div class="form-grid">
-              <label class="field">Start offset <input id="extractOffset" type="number" min="0" value="0" /></label>
-              <label class="field">Batch size <input id="extractLimit" type="number" min="1" max="200" value="40" /></label>
-              <label class="field">Minimum frequency <input id="extractMinFreq" type="number" min="1" max="10" value="2" /></label>
-              <label class="field">Extract mode
-                <select id="extractMode">
-                  <option value="local">Local scan (free)</option>
-                  <option value="llm">LLM extract (paid)</option>
-                </select>
-              </label>
-              <label class="field">Decide model <select id="model-extract"></select></label>
-            </div>
-            <div class="row" style="margin-top: 14px">
-              <button class="btn primary" id="runExtract">Scan batch</button>
-              <button class="btn" id="scanAll">Scan whole novel</button>
-              <button class="btn" id="runDecide">Decide batch</button>
-              <span class="muted" id="extractNote"></span>
-            </div>
-            <p class="muted" id="llmNote"></p>
-            <p class="muted" id="decideNote"></p>
-            <div class="bar" id="extractBar" hidden><span style="width: 0%"></span></div>
-          </div>
-
-          <div class="card">
-            <h2>Largest terms in this novel</h2>
-            <div class="table-wrap" id="extractResults"></div>
-          </div>
-        </section>
-
         <!-- ------------------------------------------------------ glossary -->
         <section class="panel" id="panel-glossary">
           <div class="stack">
             <div class="card">
+              <h2>Extraction</h2>
+              <p class="hint">
+                Scan crawled chapters for recurring names, sects, techniques and items. The local
+                scan is free — jieba segments Chinese and the rules drop phrases and noise. The
+                paid mode sends those candidates with the sentences they appear in, so one call
+                keeps or drops each term and gives its category and English rendering. Frequency
+                is added to existing terms; decisions and locked entries are never touched.
+              </p>
+              <div class="form-grid">
+                <label class="field">Start offset <input id="extractOffset" type="number" min="0" value="0" /></label>
+                <label class="field">Batch size <input id="extractLimit" type="number" min="1" max="200" value="40" /></label>
+                <label class="field">Term cap <input id="extractCap" type="number" min="0" value="0" title="0 stores every term the scan finds" /></label>
+                <label class="field">Minimum frequency <input id="extractMinFreq" type="number" min="1" max="10" value="2" /></label>
+                <label class="field">Extract mode
+                  <select id="extractMode">
+                    <option value="local">Local scan (free)</option>
+                    <option value="llm">LLM extract + decide (paid)</option>
+                  </select>
+                </label>
+                <label class="field">Run model <select id="model-extract"></select></label>
+              </div>
+              <div class="row" style="margin-top: 14px">
+                <button class="btn primary" id="runExtract">Scan batch</button>
+                <button class="btn" id="scanAll">Scan whole novel</button>
+                <button class="btn" id="runDecide">Decide batch</button>
+                <span class="muted" id="extractNote"></span>
+              </div>
+              <p class="muted" id="llmNote"></p>
+              <p class="muted" id="decideNote"></p>
+              <div class="bar" id="extractBar" hidden><span style="width: 0%"></span></div>
+            </div>
+
+            <div class="card">
+              <h2>Largest terms in this novel</h2>
+              <div class="table-wrap" id="extractResults"></div>
+            </div>
+
+            <div class="card">
               <h2>Glossary</h2>
               <p class="hint">
-                Decide batch in the Glossary extraction tab settles every open term in one paid
-                call: whether it is a term, its category and its English rendering. A decision
-                already recorded is never asked about again, and editor-locked entries are never
-                overwritten.
+                Decide batch above settles every open term in one paid call: whether it is a term,
+                its category and its English rendering. A decision already recorded is never asked
+                about again, and editor-locked entries are never overwritten.
               </p>
               <dl class="kv" id="glossStats"></dl>
               <div class="row" style="margin-top: 12px">
@@ -280,8 +277,9 @@
           <div class="card">
             <h2>Chapter translation</h2>
             <p class="hint">
-              Pick a pass, select chapters, then queue them. Only chapters with crawled source text
-              can be translated. Web and Web+ are keyless; AI spends the key pool.
+              Pick a pass, select chapters, then queue them — or queue the whole novel in one job.
+              Only chapters with crawled source text are translated. Web and Web+ are keyless; AI
+              spends the key pool.
             </p>
             <div class="row">
               <div class="modes compact" id="chapterModes" role="group" aria-label="Translation pass">
@@ -291,6 +289,7 @@
               </div>
               <div class="spacer"></div>
               <button class="btn" id="pageSelect">Select page</button>
+              <button class="btn" id="translateAll">Translate all</button>
               <button class="btn primary" id="translateSelected">Translate selected</button>
             </div>
             <p class="muted" id="chapterNote"></p>

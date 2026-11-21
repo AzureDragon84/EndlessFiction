@@ -45,7 +45,16 @@ class TranslateVolumesRequest(BaseModel):
 
 
 class TranslateChaptersRequest(BaseModel):
-    chapters: List[str] = Field(description="List of chapter ids to translate")
+    chapters: List[str] = Field(
+        default_factory=list, description="List of chapter ids to translate"
+    )
+    all: bool = Field(
+        default=False,
+        description="Translate every crawled chapter of novel_id instead of the list",
+    )
+    novel_id: Optional[str] = Field(
+        default=None, description="The novel whose chapters `all` selects"
+    )
     language: LanguageCode = Field(description="Target language code")
     mode: TranslationMode = Field(
         default=TranslationMode.ai,

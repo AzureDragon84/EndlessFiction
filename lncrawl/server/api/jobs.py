@@ -246,7 +246,16 @@ def translate_chapters(
         raise ServerErrors.translation_disabled
     if not ctx.tier.translation_enabled(user):
         raise ServerErrors.tier_not_allowed
-    chapters = list(set(body.chapters))
+    if body.all:
+        if not body.novel_id:
+            raise ServerErrors.invalid_input.with_extra(
+                "`novel_id` is required when `all` is true."
+            )
+        # Every crawled chapter, server-side: the browser does not have to page
+        # through thousands of ids, and one id query beats a file stat per row.
+        chapters = ctx.chapters.list_ids(novel_id=body.novel_id, is_crawled=True)
+    else:
+        chapters = list(set(body.chapters))
     if not chapters:
         raise ServerErrors.no_chapters_to_download
     if len(chapters) > 1 and not ctx.tier.batch_translation_enabled(user):

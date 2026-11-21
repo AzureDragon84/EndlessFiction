@@ -8,7 +8,7 @@ without touching any stored translation.
 """
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 from fastapi import APIRouter, Body, Depends, Path, Query, Security
 import sqlmodel as sq
@@ -22,13 +22,12 @@ from ...dao import (
     Novel,
     User,
 )
-from ...enums import TermCategory, coerce_category, coerce_verdict
+from ...enums import coerce_verdict
 from ...exceptions import ServerErrors
 from ...services.key_pool import TASKS
 from ...services.llm_json import (
     CASING_NOTE,
     JudgeItem,
-    SurfaceItem,
     call_items,
     category_prompt,
 )
@@ -66,20 +65,22 @@ _DECIDE_CONTRACT = (
 )
 # One decision batch; a bigger batch costs one long reply for the same decisions.
 DECIDE_BATCH = 50
-_SURFACE_HINT = (
-    "You extract glossary terms from Chinese web-novel chapter text. A term is a "
-    "proper name a translator must render the same way every time: a person, "
-    "place, sect, rank or realm, technique, item, formation, creature, race or "
-    "title. Skip ordinary vocabulary, pronouns, measure words, numbers, "
-    "sound effects, system messages, stat names and job descriptions such as "
-    "舰长 or 工程师: a term names one thing, not a phrase that describes it."
-)
-_SURFACE_CONTRACT = (
-    "Return ONLY a JSON array of objects, for example "
-    '[{"surface": "青云宗", "category": "sect_org"}]. '
-    "Use the surface exactly as it appears in the text, and list each surface "
-    "once however often it occurs. An empty array is a valid answer.\n" + category_prompt()
-)
+# One paid extraction call judges this many locally found candidates. The
+# notebook sent candidates, not raw chapter text, so a call carries the terms
+# that actually recur instead of 8k characters of story.
+LLM_BATCH_TERMS = 150
+# Counters of a batch that was not scanned: an empty one, or a follow-up round
+# that reuses the scan the first round already stored.
+_NO_SCAN: Dict[str, Any] = {
+    "found": 0,
+    "found_total": 0,
+    "new": 0,
+    "updated": 0,
+    "blocked": 0,
+    "hidden": 0,
+    "cap": 0,
+    "capped": False,
+}
 
 
 def _task_result(
@@ -473,10 +474,10 @@ def glossary_extract(
     limit: int = Query(default=40, ge=1, le=200),
     min_freq: int = Query(default=2, ge=1, le=10),
     term_limit: int = Query(
-        default=200,
-        ge=10,
-        le=5000,
-        description="Term cap for this batch; echoed back as `cap` with `capped`",
+        default=0,
+        ge=0,
+        le=100000,
+        description="Term cap for this batch; 0 stores every term the scan finds",
     ),
 ) -> Dict[str, Any]:
     return ctx.terms.scan(
@@ -484,7 +485,7 @@ def glossary_extract(
         offset=offset,
         limit=limit,
         min_freq=min_freq,
-        term_limit=term_limit,
+        term_limit=term_limit or None,
     )
 
 
@@ -497,20 +498,29 @@ def glossary_extract_plan(
     novel_id: str = Path(),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=40, ge=1, le=200),
+    min_freq: int = Query(default=2, ge=1, le=10),
+    term_limit: int = Query(default=0, ge=0, le=100000),
 ) -> Dict[str, Any]:
-    """What the LLM extractor would spend on this batch, sending nothing.
+    """What the LLM extractor could spend on this batch, sending nothing.
 
-    The panel prints this line before a run and the run re-checks it, so the
-    number an admin is shown is the number the pool is asked for.
+    The scan is the same one the run performs, so this is the best estimate
+    available without writing anything: terms an earlier scan already stored in
+    these chapters can add to the queue, while candidates an earlier run decided
+    are not asked about again. The run re-checks the real queue before every
+    call, which is what keeps this number honest.
     """
     batch = ctx.terms.llm_batch(novel_id, offset, limit)
     headroom = ctx.key_pool.estimate(0)
-    calls = len(batch.chunks)
+    candidates = ctx.terms.llm_candidate_count(
+        novel_id, batch, min_freq=min_freq, term_limit=term_limit
+    )
+    calls = -(-candidates // LLM_BATCH_TERMS)
     return {
         "offset": offset,
         "chapters": len(batch.chapters),
         "readable": len(batch.pages),
         "chars": batch.chars,
+        "candidates": candidates,
         "calls": calls,
         "remaining_calls_today": headroom["remaining_calls_today"],
         "enough": calls <= headroom["remaining_calls_today"],
@@ -518,108 +528,174 @@ def glossary_extract_plan(
     }
 
 
-@router.post(
-    "/{novel_id}/glossary/extract/llm",
-    summary="Tab 1b: let the extract chain name the terms of one batch",
-    dependencies=[Security(ensure_admin)],
-)
-def glossary_extract_llm(
-    novel_id: str = Path(),
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=40, ge=1, le=200),
-    term_limit: int = Query(default=200, ge=10, le=5000),
-    model: Optional[str] = Depends(pinned_model),
-) -> Dict[str, Any]:
-    """The opt-in second extraction mode: one paid call per ~8k chars.
+def _known_glossary(novel_id: str, language: str, queue: Sequence[Dict[str, Any]]) -> str:
+    """Decided renderings whose source appears in this batch's evidence.
 
-    The free scan stays the default; this runs on the same batch so the two can
-    be compared honestly. It is refused before a single call when the batch
-    needs more requests than the pool has left today.
+    The model can keep a sect or a title consistent only if it can see the
+    decisions already made next to the candidate it is judging. Only terms that
+    occur in these snippets are worth the prompt space; a glossary line the
+    model cannot connect to anything is noise.
     """
-    batch = ctx.terms.llm_batch(novel_id, offset, limit)
-    if not batch.chunks:
-        return {
-            **_task_result(0, 0, 0, 0, 0, None, "No crawled chapter text in this batch."),
-            "found": 0,
-            "found_total": 0,
-            "new": 0,
-            "updated": 0,
-            "blocked": 0,
-            "hidden": 0,
-            "calls": 0,
-            "chapters": len(batch.chapters),
-            "readable": 0,
-            "chars": 0,
-            "offset": offset,
-            "next_offset": offset + len(batch.chapters),
-            "total_chapters": batch.total_chapters,
-            "cap": term_limit,
-            "capped": False,
-        }
-    headroom = ctx.key_pool.estimate(0)
-    if len(batch.chunks) > headroom["remaining_calls_today"]:
-        raise ServerErrors.pool_headroom_insufficient.with_extra(
-            f"~{len(batch.chunks)} call(s) needed, "
-            f"{headroom['remaining_calls_today']} left today. Nothing was sent."
-        )
-    proposed: Dict[str, Optional[TermCategory]] = {}
-    answered_by: Optional[str] = None
-    error: Optional[str] = None
-    answered = 0
-    for chunk in batch.chunks:
-        text = "\n\n".join(page for _, page in chunk)
-        prompt = f"{_SURFACE_HINT}\n\n{_SURFACE_CONTRACT}\n\nChapter text:\n{text}"
-        reply = call_items("extract", prompt, SurfaceItem, model=model)
-        answered += len(reply.items)
-        answered_by = reply.model or answered_by
-        if reply.error and not error:
-            error = reply.error
-        for item in reply.items:
-            surface = item.source.strip()
-            if surface:
-                proposed.setdefault(surface, coerce_category(item.category))
-    result = ctx.terms.store_llm_terms(
-        novel_id,
-        batch,
-        proposed,
-        model=answered_by or "unknown",
-        offset=offset,
-        requested=max(1, limit),
-        term_limit=term_limit,
-    )
-    # Only the model's own surfaces count against what it was asked: the free
-    # scan fills the batch too, and crediting those to the answer would report
-    # more stored terms than were parsed.
-    stored = max(0, min(len(proposed), result["model"] - result["blocked"]))
-    invalid = len(proposed) - stored
-    if not error and invalid:
-        error = f"{invalid} surface(s) were not in the text or were over the cap."
+    blob = "".join(item["source"] + "".join(item["context"]) for item in queue)
+    lines = [
+        f"{source}={rendering}"
+        for source, rendering in ctx.terms.glossary(novel_id, language).items()
+        if rendering and source and source in blob
+    ]
+    return "\n".join(lines[:60]) or "(none yet)"
+
+
+def _batch_fields(scan: Dict[str, Any], batch: Any, offset: int, calls: int) -> Dict[str, Any]:
+    """The extraction counters one paid round returns, from its local scan."""
     return {
-        **_task_result(
-            answered,
-            len(proposed),
-            stored,
-            invalid,
-            max(0, answered - len(proposed)),
-            answered_by,
-            error,
-        ),
-        "found": result["found"],
-        "found_total": result["found_total"],
-        "new": result["new"],
-        "updated": result["updated"],
-        "blocked": result["blocked"],
-        "hidden": result["hidden"],
-        "calls": len(batch.chunks),
+        "found": scan["found"],
+        "found_total": scan["found_total"],
+        "new": scan["new"],
+        "updated": scan["updated"],
+        "blocked": scan["blocked"],
+        "hidden": scan["hidden"],
+        "calls": calls,
         "chapters": len(batch.chapters),
         "readable": len(batch.pages),
         "chars": batch.chars,
         "offset": offset,
         "next_offset": offset + len(batch.chapters),
         "total_chapters": batch.total_chapters,
-        "cap": result["cap"],
-        "capped": result["capped"],
-        "local": result.get("local", 0),
+        "cap": scan["cap"],
+        "capped": scan["capped"],
+    }
+
+
+@router.post(
+    "/{novel_id}/glossary/extract/llm",
+    summary="Tab 1b: scan a batch and let the pool judge its candidates",
+    dependencies=[Security(ensure_admin)],
+)
+def glossary_extract_llm(
+    novel_id: str = Path(),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=40, ge=1, le=200),
+    min_freq: int = Query(default=2, ge=1, le=10),
+    term_limit: int = Query(
+        default=0,
+        ge=0,
+        le=100000,
+        description="Local term cap for this batch; 0 stores every term",
+    ),
+    language: str = Query(default="en"),
+    rescan: bool = Query(
+        default=True, description="Scan the batch first; false on a follow-up round"
+    ),
+    model: Optional[str] = Depends(pinned_model),
+) -> Dict[str, Any]:
+    """The opt-in paid mode: judge the batch's local candidates one call at a time.
+
+    The notebook's shape, kept: jieba finds the recurring surfaces for free, and
+    a paid call receives those candidates with the sentences they appear in.
+    The reply is the decision itself — keep or skip, category, English rendering
+    — so extraction and translation settle together instead of paying twice for
+    the same text.
+
+    One request makes at most one paid call. A long chapter batch is several
+    rounds; the panel chains them, each under the tunnel's request timeout.
+    `more` says whether the batch still has candidates this round did not
+    judge, and a batch is refused before any call when the pool has nothing
+    left today.
+    """
+    lang = _language(language)
+    batch = ctx.terms.llm_batch(novel_id, offset, limit)
+    if not batch.pages:
+        return {
+            **_task_result(0, 0, 0, 0, 0, None, "No crawled chapter text in this batch."),
+            **_batch_fields(_NO_SCAN, batch, offset, 0),
+            "more": False,
+            "merged": 0,
+            "categorized": 0,
+            "rendered": 0,
+        }
+    # The free scan stores every recurring surface it finds, so the paid call
+    # judges a term row that already exists and its counts are ours, not the
+    # model's. This is also why a failed paid call still leaves useful terms.
+    # Follow-up rounds skip it: the same chapters were just scanned, and a
+    # second scan would only add latency to an already long run.
+    scan = (
+        ctx.terms.scan(
+            novel_id,
+            offset=offset,
+            limit=limit,
+            min_freq=min_freq,
+            term_limit=term_limit or None,
+        )
+        if rescan
+        else _NO_SCAN
+    )
+    # One extra row answers "is there another round?" without loading evidence
+    # for the whole queue: the count is never used to drop a candidate.
+    queue = ctx.terms.decide_queue(
+        novel_id,
+        lang,
+        LLM_BATCH_TERMS + 1,
+        chapter_ids=[chapter.id for chapter in batch.chapters],
+    )
+    if not queue:
+        return {
+            **_task_result(0, 0, 0, 0, 0, None),
+            **_batch_fields(scan, batch, offset, 0),
+            "more": False,
+            "merged": 0,
+            "categorized": 0,
+            "rendered": 0,
+        }
+    group = queue[:LLM_BATCH_TERMS]
+    more = len(queue) > len(group)
+    headroom = ctx.key_pool.estimate(0)
+    if headroom["remaining_calls_today"] < 1:
+        raise ServerErrors.pool_headroom_insufficient.with_extra(
+            f"1 call needed for {len(group)} candidate(s), "
+            f"{headroom['remaining_calls_today']} left today. Nothing was sent."
+        )
+    style = ctx.terms.translation_style(novel_id)
+    known = _known_glossary(novel_id, lang, group)
+    candidates = [
+        {"source": item["source"], "freq": item["freq"], "context": item["context"]}
+        for item in group
+    ]
+    prompt = (
+        f"{_TASK_HINTS['extract']}\n\n{CASING_NOTE}\n{_style_note(style)}\n"
+        f"Terms already decided (reuse these renderings; never change them):\n{known}\n\n"
+        f"{_DECIDE_CONTRACT}\n{category_prompt(style['categories'])}\n\n"
+        f"Candidates: {json.dumps(candidates, ensure_ascii=False)}"
+    )
+    reply = call_items(
+        "extract",
+        prompt,
+        JudgeItem,
+        asked=len(group),
+        check=lambda item: coerce_verdict(item.verdict) is not None,
+        model=model,
+    )
+    wanted = {item["source"] for item in group}
+    answers = [item.model_dump() for item in reply.items if item.source in wanted]
+    numbers = ctx.terms.apply_decisions(novel_id, lang, answers, model=reply.model or "unknown")
+    invalid = len(answers) - numbers["stored"]
+    error = reply.error
+    if not error and invalid:
+        error = f"{invalid} answer(s) named no term in this batch or changed nothing."
+    return {
+        **_task_result(
+            len(group),
+            len(answers),
+            numbers["stored"],
+            invalid,
+            len(group) - len(answers),
+            reply.model,
+            error,
+        ),
+        **_batch_fields(scan, batch, offset, 1),
+        "merged": numbers["merged"],
+        "categorized": numbers["categorized"],
+        "rendered": numbers["rendered"],
+        "more": more,
     }
 
 

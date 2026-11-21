@@ -8,8 +8,7 @@
   const TITLES = {
     overview: "Overview",
     keys: "Keys & models",
-    extract: "Glossary extraction",
-    glossary: "Glossary translation",
+    glossary: "Glossary",
     chapters: "Chapter translation",
     settings: "Settings",
   };
@@ -181,13 +180,15 @@
   const refresh = {
     overview: refreshOverview,
     keys: refreshKeys,
-    extract: refreshExtract,
     glossary: refreshGlossary,
     chapters: refreshChapters,
     settings: refreshSettings,
   };
 
   function showPanel(name) {
+    // The extraction and translation panels are one tab now; an old bookmark
+    // or `#extract` link still lands on it.
+    if (name === "extract") name = "glossary";
     if (!refresh[name]) name = "overview";
     state.panel = name;
     stopTimers();
@@ -595,11 +596,16 @@
 
   // ------------------------------------------------------------ extract
 
+  // Paid rounds one click may chain. This is a spend guard, not a cap on the
+  // queue: the undecided terms stay queued and the next click continues.
+  const MAX_LLM_ROUNDS = 12;
+
   async function extractBatch(offset, announce = true) {
     const limit = Number($("extractLimit").value || 40);
     const minFreq = Number($("extractMinFreq").value || 2);
+    const cap = Number($("extractCap").value || 0);
     const data = await api(
-      `/api/translation/${state.novelId}/glossary/extract?offset=${offset}&limit=${limit}&min_freq=${minFreq}`,
+      `/api/translation/${state.novelId}/glossary/extract?offset=${offset}&limit=${limit}&min_freq=${minFreq}&term_limit=${cap}`,
       { method: "POST" },
     );
     $("extractOffset").value = data.next_offset;
@@ -620,27 +626,55 @@
     const model = $("model-extract").value;
     const pinned = model ? `&model=${encodeURIComponent(model)}` : "";
     const limit = Number($("extractLimit").value || 40);
-    note("extractNote", "Reading the batch and asking the pool…");
-    const data = await api(
-      `/api/translation/${state.novelId}/glossary/extract/llm?offset=${offset}&limit=${limit}${pinned}`,
-      { method: "POST" },
-    );
+    const minFreq = Number($("extractMinFreq").value || 2);
+    const cap = Number($("extractCap").value || 0);
+    note("extractNote", "Scanning the batch, then asking the pool to judge its candidates…");
+    let asked = 0;
+    let stored = 0;
+    let rendered = 0;
+    let invalid = 0;
+    let rounds = 0;
+    let first = null;
+    let data = null;
+    // One request is one paid call, so a long candidate queue stays under the
+    // tunnel's request timeout. Each round settles the next 150 open terms and
+    // `more` says whether the server has another round for this batch.
+    for (;;) {
+      data = await api(
+        `/api/translation/${state.novelId}/glossary/extract/llm?offset=${offset}&limit=${limit}&min_freq=${minFreq}&term_limit=${cap}&language=${state.language}&rescan=${rounds ? 0 : 1}${pinned}`,
+        { method: "POST" },
+      );
+      rounds += 1;
+      if (!first) first = data;
+      asked += data.asked || 0;
+      stored += data.stored || 0;
+      rendered += data.rendered || 0;
+      invalid += data.invalid || 0;
+      note("extractNote", `Round ${rounds}: ${num(stored)} of ${num(asked)} decided`);
+      if (!data.more || !data.stored || rounds >= MAX_LLM_ROUNDS) break;
+    }
     $("extractOffset").value = data.next_offset;
+    const stopped = !data.more
+      ? ""
+      : rounds >= MAX_LLM_ROUNDS
+        ? ` · stopped after ${MAX_LLM_ROUNDS} rounds; run again for the rest`
+        : " · no candidate was decided this round";
     const line =
-      `${data.stored} of ${data.asked} surface(s) stored via ${data.model || "?"}` +
-      (data.local ? ` · +${data.local} from the local scan` : "") +
-      ` · ${data.new} new · ${data.updated} updated` +
-      (data.blocked ? ` · ${data.blocked} blocked` : "") +
-      (data.invalid ? ` · ${data.invalid} invalid` : "") +
-      (data.capped ? ` · capped: ${data.found} of ${data.found_total}` : "") +
-      ` · ${data.calls} call(s) · next ${data.next_offset}/${data.total_chapters}`;
+      `${stored} of ${asked} candidate(s) decided in ${rounds} round(s) via ${data.model || "?"}` +
+      (rendered ? ` · ${rendered} rendered` : "") +
+      ` · ${first.new} new · ${first.updated} updated` +
+      (first.blocked ? ` · ${first.blocked} blocked` : "") +
+      (invalid ? ` · ${invalid} invalid` : "") +
+      (first.capped ? ` · capped: ${first.found} of ${first.found_total}` : "") +
+      ` · next ${data.next_offset}/${data.total_chapters}` +
+      stopped;
     note("extractNote", data.error ? `${line} · ${data.error}` : line, Boolean(data.error && !data.stored));
     await refreshPlan();
     return data;
   }
 
-  // Preflight for the paid mode: the call count shown here is the one the run
-  // re-checks, and the server refuses the run when the pool cannot cover it.
+  // Preflight for the paid mode: the call count is an upper bound, and every
+  // round of the run re-checks the queue and the pool before spending a call.
   async function refreshPlan() {
     if (!state.novelId) return;
     const mode = $("extractMode").value;
@@ -652,14 +686,17 @@
     try {
       const offset = Number($("extractOffset").value || 0);
       const limit = Number($("extractLimit").value || 40);
+      const minFreq = Number($("extractMinFreq").value || 2);
+      const cap = Number($("extractCap").value || 0);
       const data = await api(
-        `/api/translation/${state.novelId}/glossary/extract/plan?offset=${offset}&limit=${limit}`,
+        `/api/translation/${state.novelId}/glossary/extract/plan?offset=${offset}&limit=${limit}&min_freq=${minFreq}&term_limit=${cap}`,
       );
       note(
         "llmNote",
-        `~${data.calls} call(s) for ${num(data.chapters)} chapter(s), ${num(data.chars)} chars` +
+        `~${data.calls} call(s) for ~${num(data.candidates)} candidate(s)` +
+          ` in ${num(data.chapters)} chapter(s), ${num(data.chars)} chars` +
           ` · ${num(data.remaining_calls_today)} left today` +
-          (data.enough ? "" : " · not enough quota, this batch will be refused"),
+          (data.enough ? "" : " · not enough for every round; the run stops when the pool is empty"),
         !data.enough,
       );
     } catch (error) {
@@ -717,7 +754,7 @@
       } else {
         await extractBatch(offset);
       }
-      await loadTopTerms();
+      await Promise.all([loadTopTerms(), loadTerms(), loadGlossaryStats()]);
     } catch (error) {
       note("extractNote", error.message, true);
     } finally {
@@ -741,6 +778,7 @@
     let changed = 0;
     try {
       for (;;) {
+        const previous = offset;
         const data = await extractBatch(offset, false);
         found += data.found;
         changed += data.new;
@@ -752,10 +790,12 @@
           "extractNote",
           `${num(offset)}/${num(data.total_chapters)} chapters · ${num(found)} found · ${num(changed)} new · batch ${batches}`,
         );
-        if (offset >= data.total_chapters || !data.scanned || batches >= 40) break;
+        // A batch with no readable chapter must not stop the whole novel; only
+        // a batch that does not advance the offset can.
+        if (offset >= data.total_chapters || offset <= previous) break;
       }
       toast(`Extraction finished: ${num(changed)} new term(s)`, "ok");
-      await loadTopTerms();
+      await Promise.all([loadTopTerms(), loadTerms(), loadGlossaryStats()]);
     } catch (error) {
       note("extractNote", error.message, true);
     } finally {
@@ -814,10 +854,10 @@
     // The style decides whether this novel has a Reading at all, so it is read
     // before the table is built.
     await loadStyle();
-    // The pool choices are read here, not only in Keys & models: the run model
-    // pickers live in this panel, and an empty select is what an admin sees
-    // when they open the glossary first.
-    await Promise.all([loadTerms(), loadGlossaryStats(), refreshTaskModels()]);
+    // Extraction and review share the tab: the batch controls, their totals,
+    // the pool model picker and the review sheet all come from this one load.
+    await refreshExtract();
+    await Promise.all([loadTerms(), loadGlossaryStats()]);
   }
 
   async function loadStyle() {
@@ -978,13 +1018,12 @@
             <td>${categorySelect(term.category)}</td>
             <td class="num">${firstChapter(term.first_chapter_serial)}</td>
             <td class="num">${num(term.freq)}</td>
-            <td class="num">${num(term.chapters || 0)}</td>
             <td>${chips}</td>
             <td class="actions">${actions}</td>
           </tr>`;
         })
         .join("");
-      host.innerHTML = `<table><thead><tr><th>Source</th><th>Rendering</th><th>Category</th><th class="num">First</th><th class="num">Freq</th><th class="num">Ch.</th><th>State</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
+      host.innerHTML = `<table><thead><tr><th>Source</th><th>Rendering</th><th>Category</th><th class="num">First</th><th class="num">Freq</th><th>State</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
       host.querySelectorAll("tr[data-handle]").forEach((row) => {
         const handle = row.dataset.handle;
         row.querySelector('[data-field="rendering"]').addEventListener("change", (event) => {
@@ -1194,6 +1233,32 @@
         body: JSON.stringify({ chapters: ids, language: state.language, mode: state.mode }),
       });
       toast(`Queued ${ids.length} chapter(s) as ${jobType(job.type)}`, "ok");
+      await refreshJobs();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function translateAll() {
+    if (!state.novelId) return;
+    if (!confirm("Queue every crawled chapter of this novel for translation?")) return;
+    const button = $("translateAll");
+    button.disabled = true;
+    try {
+      // The server selects every chapter with crawled text, so the browser
+      // never has to page through thousands of ids to ask for the whole novel.
+      const job = await api("/api/job/create/translate-chapters", {
+        method: "POST",
+        body: JSON.stringify({
+          all: true,
+          novel_id: state.novelId,
+          language: state.language,
+          mode: state.mode,
+        }),
+      });
+      toast(`Queued the whole novel as ${jobType(job.type)}`, "ok");
       await refreshJobs();
     } catch (error) {
       toast(error.message, "error");
@@ -1429,7 +1494,7 @@
   $("extractMode").addEventListener("change", () => {
     refreshPlan().catch((error) => toast(error.message, "error"));
   });
-  ["extractOffset", "extractLimit"].forEach((id) => {
+  ["extractOffset", "extractLimit", "extractMinFreq", "extractCap"].forEach((id) => {
     $(id).addEventListener("change", () => {
       refreshPlan().catch((error) => toast(error.message, "error"));
     });
@@ -1485,6 +1550,7 @@
     });
   });
   $("pageSelect").addEventListener("click", selectPage);
+  $("translateAll").addEventListener("click", translateAll);
   $("translateSelected").addEventListener("click", translateSelected);
   $("chapterPrev").addEventListener("click", () => {
     state.chapterOffset = Math.max(0, state.chapterOffset - state.chapterLimit);

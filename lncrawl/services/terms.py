@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, cast
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, cast
 
 from bs4 import BeautifulSoup
 from bs4.element import NavigableString
@@ -54,7 +54,7 @@ from .glossary import (
     record_extracted_terms,
     term_lock,
 )
-from .glossary_extract import ExtractedTerm, extract_terms, plausible_surface
+from .glossary_extract import ExtractedTerm, extract_terms
 from .glossary_profile import base_code, describe_profiles, profile_for
 
 # Attribute the reader uses to find a term again after a glossary edit.
@@ -62,9 +62,6 @@ TERM_ATTR = "data-g"
 
 # "All rows" on the review sheet: the sheet serves a page, not the whole table.
 NO_LIMIT = 2000
-# Source characters one paid extraction request carries. Larger chunks cost the
-# same call but risk the reply's token budget; smaller ones multiply the spend.
-LLM_CHUNK_CHARS = 8000
 
 # Per-novel rendering style, stored in `Novel.extra` rather than a table: it is
 # two settings about one novel, not a record with a life of its own.
@@ -98,14 +95,12 @@ def _clean_style(raw: Any) -> Dict[str, Any]:
 
 @dataclass(frozen=True)
 class LlmBatch:
-    """One paid extraction batch, already grouped into prompt-sized chunks."""
+    """One paid extraction batch, read once for both the plan and the run."""
 
     chapters: List[Chapter]
     """Every chapter in the batch, read or not, so the scan scope is exact."""
     pages: List[Tuple[int, str]]
     """(chapter serial, plain text) for the chapters that have text."""
-    chunks: List[List[Tuple[int, str]]]
-    """Whole chapters grouped up to `LLM_CHUNK_CHARS`, one request each."""
     chars: int
     total_chapters: int
 
@@ -441,16 +436,14 @@ class TermService:
         chapters leaves `freq` and the counters exactly where they were. The
         run itself is recorded in `glossary_scans`.
 
-        `term_limit` is this batch's term cap, applied after every filter and
-        reported back with `found_total`/`capped`. The old fixed 200 dropped the
-        tail of a batch silently, so a truncated scan looked exactly like a
-        complete one. One extra term is requested to make "the cap bit"
-        observable. `blocked` counts the surfaces a rescan met and refused to
-        re-store, and `hidden` the ones it refreshed that review had hidden.
+        `term_limit` is this batch's optional term cap, applied after every
+        filter and reported back with `found_total`/`capped`. Unset means every
+        qualifying surface is stored: a fixed cap dropped the tail of a batch
+        silently, so a scan looked complete at exactly 200 terms. `blocked`
+        counts the surfaces a rescan met and refused to re-store, and `hidden`
+        the ones it refreshed that review had hidden.
         """
-        from .glossary_extract import MAX_TERMS
-
-        cap = max(1, int(term_limit or MAX_TERMS))
+        cap = int(term_limit) if term_limit and term_limit > 0 else None
         chapters = ctx.chapters.list(novel_id=novel_id)
         batch = chapters[offset : offset + max(1, limit)]
         pages: List[Tuple[int, str]] = []
@@ -461,11 +454,11 @@ class TermService:
             pages,
             language=self.novel_language(ctx.novels.get(novel_id)),
             min_freq=min_freq,
-            limit=cap + 1,
+            limit=cap + 1 if cap else None,
         )
         found_total = len(found)
-        capped = found_total > cap
-        if capped:
+        capped = bool(cap and found_total > cap)
+        if capped and cap:
             found = found[:cap]
         numbers, scan_id = self._store_scan(
             novel_id,
@@ -473,7 +466,7 @@ class TermService:
             found,
             scanned=len(pages),
             found_total=found_total,
-            cap=cap,
+            cap=cap or 0,
             capped=capped,
             offset=offset,
             requested=max(1, limit),
@@ -490,7 +483,7 @@ class TermService:
             "updated": numbers["updated"],
             "hidden": numbers["hidden"],
             "blocked": numbers["blocked"],
-            "cap": cap,
+            "cap": cap or 0,
             "capped": capped,
         }
 
@@ -498,9 +491,9 @@ class TermService:
         """The batch a paid extraction run would read, before spending anything.
 
         The same method serves the preflight estimate and the run itself, so the
-        call count an admin is shown is the one that will be spent. Whole
-        chapters are grouped, never split: the model needs a complete scene to
-        tell a name from an ordinary phrase.
+        call count an admin is shown is the one that will be spent. Pages are
+        whole chapters, never split: a name is judged from the sentences around
+        it, not from an 8k-character window.
         """
         chapters = ctx.chapters.list(novel_id=novel_id)
         batch = list(chapters[offset : offset + max(1, limit)])
@@ -509,118 +502,32 @@ class TermService:
             for chapter in batch
             if chapter.is_available
         ]
-        chunks: List[List[Tuple[int, str]]] = []
-        current: List[Tuple[int, str]] = []
-        size = 0
-        for page in pages:
-            length = len(page[1])
-            if current and size + length > LLM_CHUNK_CHARS:
-                chunks.append(current)
-                current, size = [], 0
-            current.append(page)
-            size += length
-        if current:
-            chunks.append(current)
         return LlmBatch(
             chapters=batch,
             pages=pages,
-            chunks=chunks,
             chars=sum(len(text) for _, text in pages),
             total_chapters=len(chapters),
         )
 
-    def store_llm_terms(
+    def llm_candidate_count(
         self,
         novel_id: str,
         batch: LlmBatch,
-        surfaces: Mapping[str, Optional[TermCategory]],
         *,
-        model: str,
-        offset: int = 0,
-        requested: int = 0,
+        min_freq: int = 2,
         term_limit: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """Count and store the surfaces a model named for one batch.
+    ) -> int:
+        """The local candidates a paid batch would judge, for its preflight.
 
-        The model proposes a surface and a category; the counts are ours. A
-        surface the text does not contain is dropped rather than stored with a
-        guessed frequency, which is how a paraphrase never becomes a glossary
-        row with `freq: 0`. Nothing here decides a rendering: the judge and a
-        human own that, exactly as they do for the free scan.
+        The run scans the batch first (free) and then queues the open terms of
+        those chapters. This counts what that scan finds; terms an earlier scan
+        stored in the same chapters can add to the queue, so it is an estimate,
+        not a bound. It reads the same pages with the same settings, not the
+        database, and writes nothing.
         """
-        from .glossary_extract import MAX_TERMS, extract_terms
-
-        cap = max(1, int(term_limit or MAX_TERMS))
         language = self.novel_language(ctx.novels.get(novel_id))
-        profile = profile_for(language)
-        per_chapter: Dict[str, Dict[int, int]] = {}
-        display: Dict[str, str] = {}
-        categories: Dict[str, Optional[TermCategory]] = {}
-        for surface, category in surfaces.items():
-            text = str(surface or "").strip()
-            key = normalize_term_key(text)
-            if not key or key in per_chapter or not plausible_surface(text):
-                continue
-            counts = {serial: page.count(text) for serial, page in batch.pages}
-            counts = {serial: count for serial, count in counts.items() if count}
-            if not counts:
-                continue
-            display[key] = text
-            per_chapter[key] = counts
-            categories[key] = category
-        totals = {key: sum(counts.values()) for key, counts in per_chapter.items()}
-        ranked = sorted(totals.items(), key=lambda item: (-item[1], -len(item[0]), item[0]))
-        found = [
-            ExtractedTerm(
-                source=display[key],
-                freq=freq,
-                first_chapter_serial=min(per_chapter[key]),
-                category=categories.get(key),
-                reading=profile.reading(display[key]),
-                chapter_counts=tuple(sorted(per_chapter[key].items())),
-                found_by=model,
-            )
-            for key, freq in ranked[:cap]
-        ]
-        # The free scan reads the same batch alongside the model. jieba knows the
-        # compounds a prompt skips (a fused sect name, a hull class) and costs no
-        # quota, so the model's answer is a floor rather than the whole batch. Its
-        # own picks keep their place; the scan fills what is left under the cap.
-        known = {normalize_term_key(term.source) for term in found}
-        added = 0
-        for term in extract_terms(batch.pages, language=language, limit=cap):
-            key = normalize_term_key(term.source)
-            if key in known or len(found) >= cap:
-                continue
-            known.add(key)
-            found.append(term)
-            added += 1
-        stored_model = min(len(ranked), cap)
-        found_total = len(ranked) + added
-        capped = found_total > cap
-        numbers, scan_id = self._store_scan(
-            novel_id,
-            batch.chapters,
-            found,
-            scanned=len(batch.pages),
-            found_total=found_total,
-            cap=cap,
-            capped=capped,
-            offset=offset,
-            requested=requested,
-            found_by=model,
-        )
-        return {
-            "scan_id": scan_id,
-            "found": len(found),
-            "found_total": found_total,
-            "model": stored_model,
-            "local": added,
-            "dropped": len(surfaces) - stored_model,
-            "cap": cap,
-            "capped": capped,
-            **numbers,
-        }
+        cap = int(term_limit) if term_limit and term_limit > 0 else None
+        return len(extract_terms(batch.pages, language=language, min_freq=min_freq, limit=cap))
 
     def _store_scan(
         self,
@@ -865,7 +772,14 @@ class TermService:
             sess.commit()
         return True
 
-    def decide_queue(self, novel_id: str, language: str, limit: int = 50) -> List[Dict[str, Any]]:
+    def decide_queue(
+        self,
+        novel_id: str,
+        language: str,
+        limit: Optional[int] = 50,
+        *,
+        chapter_ids: Optional[Sequence[str]] = None,
+    ) -> List[Dict[str, Any]]:
         """Terms the paid pass still has something to decide, with evidence.
 
         One queue for verdict, category and rendering: a term is asked about
@@ -877,7 +791,10 @@ class TermService:
         A bare surface (`浩然`) is ambiguous; two sentences from the chapter
         that uses it most are enough to tell a name from a phrase, and the
         per-chapter counts already planted by the scan say which chapter that
-        is.
+        is. `chapter_ids` scopes the queue to one extraction batch, so a paid
+        batch pass judges the terms of the chapters it just read rather than
+        the whole novel's top terms again; an explicit empty list means no
+        chapters, not every chapter. `limit` unset returns the whole queue.
         """
         decided = sq.select(GlossaryEntry.term_id).where(
             sq.col(GlossaryEntry.language) == language,
@@ -900,9 +817,18 @@ class TermService:
                 ),
                 self._rejected(sess, novel_id),
             )
-            terms = sess.exec(
-                stmt.order_by(sq.desc(sq.col(GlossaryTerm.freq))).limit(max(1, limit))
-            ).all()
+            if chapter_ids is not None:
+                stmt = stmt.where(
+                    sq.col(GlossaryTerm.id).in_(
+                        sq.select(GlossaryTermCount.term_id).where(
+                            sq.col(GlossaryTermCount.chapter_id).in_(list(chapter_ids))
+                        )
+                    )
+                )
+            stmt = stmt.order_by(sq.desc(sq.col(GlossaryTerm.freq)))
+            if limit:
+                stmt = stmt.limit(max(1, limit))
+            terms = sess.exec(stmt).all()
             if not terms:
                 return []
             term_ids = [term.id for term in terms]

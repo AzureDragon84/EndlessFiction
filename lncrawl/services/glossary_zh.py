@@ -50,8 +50,14 @@ FUSE_ROUNDS = 3
 _HAN = "\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
 _HAN_RUN = re.compile(f"[{_HAN}]+")
 _HAN_ONLY = re.compile(f"[{_HAN}]+")
-# Ruby annotations (`｜漢字《かな》`) are reading aids, not story text.
-_RUBY = re.compile(f"[{_HAN}]+《[^》]*》")
+# Ruby annotations (`｜漢字《かな》`) are reading aids, not story text. The
+# bracket body must contain no Han: `《九转金经》` is a book title the glossary
+# wants, while `漢字《かな》` is furigana. A wildcard body ate every title.
+_RUBY = re.compile(f"[{_HAN}]+《[^{_HAN}]*》")
+# A title inside 【】 or 《》 is almost always a term, and it is the one hint the
+# notebook's jieba pass trusted on its own. `《》` also marks book titles, so the
+# inner text still goes through `_keep`.
+_BRACKET = re.compile(r"[【《]([^】》\n]{2,16})[】》]")
 
 # Leading classifiers, numerals and trailing particles that survive
 # segmentation when a name sits next to a measure word (`三艘星舰`, `林凡的`).
@@ -410,6 +416,10 @@ def _pattern_candidates(text: str) -> Counter:
             surface = match.group(0)
             if _GRAMMAR.isdisjoint(surface):
                 found[surface] += 1
+    for match in _BRACKET.finditer(text):
+        surface = match.group(1).strip()
+        if _GRAMMAR.isdisjoint(surface):
+            found[surface] += 1
     for match in _SPEECH_TAG.finditer(text):
         surface = match.group(1) + match.group(2)
         if _GRAMMAR.isdisjoint(surface):
