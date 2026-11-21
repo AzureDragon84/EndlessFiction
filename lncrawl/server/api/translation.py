@@ -587,8 +587,11 @@ def glossary_extract_llm(
         requested=max(1, limit),
         term_limit=term_limit,
     )
-    stored = max(0, result["found"] - result["blocked"])
-    invalid = max(0, len(proposed) - stored)
+    # Only the model's own surfaces count against what it was asked: the free
+    # scan fills the batch too, and crediting those to the answer would report
+    # more stored terms than were parsed.
+    stored = max(0, min(len(proposed), result["model"] - result["blocked"]))
+    invalid = len(proposed) - stored
     if not error and invalid:
         error = f"{invalid} surface(s) were not in the text or were over the cap."
     return {

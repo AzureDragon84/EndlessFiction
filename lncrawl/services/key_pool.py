@@ -3,7 +3,7 @@
 The notebook does not treat a provider as one account with one key. It treats a
 *unit* as one model on one key, each with its own rpm/tpm/rpd, and keeps a
 per-unit daily ledger on Drive (`pool_state.json`). A task (`translate`,
-`extract`, `conflicts`) names a chain of models; the pool hands out the unit
+`extract`) names a chain of models; the pool hands out the unit
 with the most room, reports the tokens it spent, and when a key says 429 puts
 just that key on a short cooldown. When every unit is out of daily requests the
 run pauses until midnight in `reset_tz` instead of failing.
@@ -625,9 +625,8 @@ class KeyPoolService:
                 row["errors"] = int(row.get("errors") or 0) + 1
                 if error == "quota":
                     row["exhausted"] = True
-                elif error == "rate":
-                    row["cooldown_until"] = now + _RATE_COOLDOWN
                 else:
+                    # Both a 429 and a plain failure rest the key for a minute.
                     row["cooldown_until"] = now + _RATE_COOLDOWN
                 self._log(state, f"{unit.model}/{unit.label}: {error} {detail}".strip())
             else:

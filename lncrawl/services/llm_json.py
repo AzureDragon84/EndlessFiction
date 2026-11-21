@@ -323,6 +323,9 @@ def call_items(
             f"{task}: unusable reply from {answered_by} ({parsed} item(s) parsed):"
             f" {text[:RAW_LOG_LIMIT]}"
         )
+    if salvaged:
+        # The re-ask was worse than the answer it tried to repair.
+        return JsonReply(items=salvaged, model=answered_by)
     return JsonReply(
         model=answered_by,
         error=f"unparseable response from {answered_by} ({parsed} of {asked or parsed} terms)",

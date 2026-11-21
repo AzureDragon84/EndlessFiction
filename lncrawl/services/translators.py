@@ -20,8 +20,6 @@ from ..context import ctx
 from ..dao import (
     Chapter,
     ChapterTranslation,
-    GlossaryEntry,
-    GlossaryTerm,
     Novel,
     NovelTranslation,
     Volume,
@@ -473,21 +471,6 @@ class TranslationService:
     # Glossary storage
     # ---------------------------------------------------------------------------------------------
 
-    def _load_glossary(self, novel_id: str, target: Any) -> Dict[str, str]:
-        """Decided renderings for one target language, in the plain
-        `source -> rendering` shape the translator package expects."""
-        with ctx.db.session() as sess:
-            rows = sess.exec(
-                sq.select(GlossaryTerm.source, GlossaryEntry.rendering)
-                .join(GlossaryEntry, sq.col(GlossaryEntry.term_id) == sq.col(GlossaryTerm.id))
-                .where(
-                    sq.col(GlossaryTerm.novel_id) == novel_id,
-                    sq.col(GlossaryEntry.language) == _code(target),
-                    sq.col(GlossaryEntry.rendering).is_not(None),
-                )
-            ).all()
-        return {source: rendering for source, rendering in rows if rendering}
-
     def _merge_glossary(
         self,
         novel_id: str,
@@ -573,7 +556,7 @@ class TranslationService:
             return
 
         source = _source_code(novel)
-        glossary = self._load_glossary(novel.id, target)
+        glossary = ctx.terms.glossary(novel.id, _code(target))
 
         result = self._translate_texts(
             [novel.title, novel.authors or ""],
@@ -626,7 +609,7 @@ class TranslationService:
         if ctx.volumes.get_volume_translation(volume, target):
             return
 
-        glossary = self._load_glossary(volume.novel_id, target)
+        glossary = ctx.terms.glossary(volume.novel_id, _code(target))
         result = self._translate_texts(
             [volume.title],
             target,
@@ -675,7 +658,7 @@ class TranslationService:
         if translation is None:
             self._run_prepass(novel, chapter, content)
         source = _source_code(novel)
-        glossary = self._load_glossary(chapter.novel_id, target)
+        glossary = ctx.terms.glossary(chapter.novel_id, _code(target))
 
         context: Dict[str, str] = {"chapter_title": chapter.title}
         if novel.title:
@@ -764,7 +747,7 @@ class TranslationService:
         content = ctx.files.load_text(chapter.content_file)
         novel = ctx.novels.get(chapter.novel_id)
         glossary = (
-            self._load_glossary(chapter.novel_id, target)
+            ctx.terms.glossary(chapter.novel_id, language)
             if mode == TranslationMode.web_plus
             else {}
         )

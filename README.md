@@ -2,19 +2,13 @@
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AzureDragon84/EndlessFiction/blob/project-alpha/colab.ipynb)
 
-**[Open in Colab →](https://colab.research.google.com/github/AzureDragon84/EndlessFiction/blob/project-alpha/colab.ipynb)**
+The `colab.ipynb` notebook boots this server in a free Colab runtime, keeps its data in the
+`data` folder of your Google Drive, and prints a public `https://….trycloudflare.com`
+address; `/admin` is the Admin Dashboard. No Cloudflare account or tunnel setup is needed.
+Run the first cell and click the link it prints; stopping the notebook stops the server.
 
-[`colab.ipynb`](colab.ipynb) boots this server in a free Colab runtime, keeps its data in the
-`data` folder of your Google Drive, and publishes it at a public
-`https://&hellip;.trycloudflare.com` address — the notebook prints the link, and `/admin` is the
-Admin Dashboard. It runs exactly this code: the Cloudflare tunnel is only the front door, and
-no Cloudflare account or token is needed — only a private GitHub repository needs one, saved
-as the `GITHUB_TOKEN` Colab secret. Run the first cell and click the link it prints; the
-server stops when the notebook stops.
-
-> GitHub's "Open in Colab" button can only fetch a notebook from a **public** repository. If
-> this one is private, open it with **File → Open notebook → GitHub** in Colab instead (and
-> add the `GITHUB_TOKEN` secret so the clone cell can reach it).
+A private repository also needs a read token saved as the `GITHUB_TOKEN` Colab secret, and its
+badge cannot open the notebook — use **File → Open notebook → GitHub** there instead.
 
 > **EndlessFiction** — this repository is a working fork of
 > [lncrawl/lightnovel-crawler](https://github.com/lncrawl/lightnovel-crawler), imported at

@@ -252,7 +252,11 @@ class TermService:
         if not pairs:
             return html
 
-        handle_of = {rendering: handle for rendering, handle in pairs}
+        # Two terms may share a rendering; the longest one keeps the handle so
+        # the card opened from the reader still names the term it came from.
+        handle_of: Dict[str, str] = {}
+        for rendering, handle in pairs:
+            handle_of.setdefault(rendering, handle)
         pattern = _mark_pattern([rendering for rendering, _ in pairs])
         soup = BeautifulSoup(html, "html.parser")
         for node in list(soup.find_all(string=True)):
@@ -290,7 +294,8 @@ class TermService:
         """Apply the current decisions to a stored chapter.
 
         A handle with no decision yet keeps the text it was stored with, so a
-        chapter never turns into a blank where a term was.
+        chapter never turns into a blank where a term was. The handles are
+        resolved from one index, not one query each.
         """
         if not html or TERM_ATTR not in html:
             return html
@@ -298,13 +303,11 @@ class TermService:
         spans = soup.select(f"[{TERM_ATTR}]")
         if not spans:
             return html
-        handles = {str(span.get(TERM_ATTR)) for span in spans}
         index = self._by_handle(novel_id, language, user_id)
         for span in spans:
             entry = index.get(str(span.get(TERM_ATTR)))
             if entry and entry.get("rendering"):
                 span.string = entry["rendering"]
-        _ = handles
         return str(soup)
 
     def card(
@@ -611,6 +614,7 @@ class TermService:
             "scan_id": scan_id,
             "found": len(found),
             "found_total": found_total,
+            "model": stored_model,
             "local": added,
             "dropped": len(surfaces) - stored_model,
             "cap": cap,
@@ -659,33 +663,6 @@ class TermService:
             sess.add(scan)
             sess.commit()
             return numbers, scan.id
-
-    def apply_renderings(
-        self,
-        novel_id: str,
-        language: str,
-        proposals: Dict[str, str],
-        *,
-        engine: str,
-    ) -> int:
-        """Store engine proposals without touching a locked entry."""
-        if not proposals:
-            return 0
-        changed = 0
-        with glossary_lock(novel_id, language), ctx.db.session() as sess:
-            for source, rendering in proposals.items():
-                source = str(source or "").strip()
-                rendering = str(rendering or "").strip()
-                if not source or not rendering:
-                    continue
-                if apply_engine_proposal(
-                    sess, novel_id, language, source, rendering, engine=engine
-                ):
-                    changed += 1
-            if changed:
-                bump_revision(sess, novel_id, language)
-            sess.commit()
-        return changed
 
     def set_rendering(
         self, novel_id: str, language: str, handle: str, rendering: Optional[str]
@@ -1053,7 +1030,15 @@ class TermService:
             rejected = self._rejected(sess, novel_id)
             stmt = sq.select(GlossaryTerm).where(sq.col(GlossaryTerm.novel_id) == novel_id)
             if category:
-                stmt = stmt.where(GlossaryTerm.category == TermCategory(category))
+                wanted = coerce_category(category)
+                if wanted is None:
+                    from ..exceptions import ServerErrors
+
+                    raise ServerErrors.invalid_input.with_extra(
+                        f"Unknown category {category!r}; expected one of "
+                        f"{', '.join(item.value for item in TermCategory)}."
+                    )
+                stmt = stmt.where(GlossaryTerm.category == wanted)
             if found_by:
                 stmt = stmt.where(sq.col(GlossaryTerm.found_by) == found_by)
             if query:
@@ -1230,6 +1215,3 @@ class TermService:
             "honorific_policies": list(HONORIFIC_POLICIES),
             "categories": [category.value for category in TermCategory],
         }
-
-    def chapter_batch(self, novel_id: str, offset: int, limit: int) -> Sequence[Chapter]:
-        return ctx.chapters.list(novel_id=novel_id)[offset : offset + limit]
